@@ -20,6 +20,8 @@ type Core struct {
 	Binary   string `json:"binary"`
 }
 type Route struct {
+	ProfileID     string          `json:"profile_id,omitempty"`
+	EgressID      string          `json:"egress_id,omitempty"`
 	Fingerprint   string          `json:"fingerprint,omitempty"`
 	UDP           bool            `json:"udp,omitempty"`
 	ID            string          `json:"id"`
@@ -67,23 +69,24 @@ type UDP struct {
 	MaxDatagramBytes int    `json:"max_datagram_bytes"`
 }
 type Config struct {
-	Generation           int64      `json:"generation,omitempty"`
-	DownloadMbps         int        `json:"download_mbps,omitempty"`
-	UploadMbps           int        `json:"upload_mbps,omitempty"`
-	Managed              bool       `json:"managed,omitempty"`
-	Policies             []Policy   `json:"policies,omitempty"`
-	LeaseUntil           time.Time  `json:"lease_until,omitempty"`
-	Cores                []Core     `json:"cores"`
-	Routes               []Route    `json:"routes"`
-	Listeners            []Listener `json:"listeners"`
-	UDP                  UDP        `json:"udp"`
-	StateDir             string     `json:"state_dir"`
-	MetricsListen        string     `json:"metrics_listen"`
-	ProbeURL             string     `json:"probe_url"`
-	ConnectTimeoutMS     int        `json:"connect_timeout_ms"`
-	MaxConnections       int        `json:"max_connections"`
-	ProbeIntervalSeconds int        `json:"probe_interval_seconds,omitempty"`
-	ProbeFallbackURLs    []string   `json:"probe_fallback_urls,omitempty"`
+	EgressPaths          []EgressPath `json:"egress_paths,omitempty"`
+	Generation           int64        `json:"generation,omitempty"`
+	DownloadMbps         int          `json:"download_mbps,omitempty"`
+	UploadMbps           int          `json:"upload_mbps,omitempty"`
+	Managed              bool         `json:"managed,omitempty"`
+	Policies             []Policy     `json:"policies,omitempty"`
+	LeaseUntil           time.Time    `json:"lease_until,omitempty"`
+	Cores                []Core       `json:"cores"`
+	Routes               []Route      `json:"routes"`
+	Listeners            []Listener   `json:"listeners"`
+	UDP                  UDP          `json:"udp"`
+	StateDir             string       `json:"state_dir"`
+	MetricsListen        string       `json:"metrics_listen"`
+	ProbeURL             string       `json:"probe_url"`
+	ConnectTimeoutMS     int          `json:"connect_timeout_ms"`
+	MaxConnections       int          `json:"max_connections"`
+	ProbeIntervalSeconds int          `json:"probe_interval_seconds,omitempty"`
+	ProbeFallbackURLs    []string     `json:"probe_fallback_urls,omitempty"`
 }
 
 var id = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,48}$`)
@@ -109,6 +112,9 @@ func Decode(r io.Reader) (Config, error) {
 	return c, c.Validate()
 }
 func (c *Config) Validate() error {
+	if err := ValidateEgressPaths(c.EgressPaths); err != nil {
+		return err
+	}
 	if (!c.Managed && (len(c.Cores) == 0 || len(c.Routes) == 0)) || len(c.Cores) > 8 || len(c.Routes) > 10000 {
 		return fmt.Errorf("cores must be 1..8 and routes 1..10000")
 	}
@@ -127,6 +133,9 @@ func (c *Config) Validate() error {
 		cores[v.ID] = true
 	}
 	for _, v := range c.Routes {
+		if err := c.ValidateRouteEgress(v); err != nil {
+			return err
+		}
 		h, _, err := net.SplitHostPort(v.Endpoint)
 		ip := net.ParseIP(h)
 		if !id.MatchString(v.ID) || routes[v.ID] || !cores[v.Core] || err != nil || ip == nil || !ip.IsLoopback() || endpoints[v.Endpoint] {
@@ -147,6 +156,17 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("at most 8 policies per worker")
 	}
 	for _, p := range c.Policies {
+		if len(c.EgressPaths) > 0 && (p.Mode == "auto" || p.Mode == "throughput" || p.Mode == "round-robin") {
+			enabled := 0
+			for _, path := range c.EgressPaths {
+				if path.Enabled {
+					enabled++
+				}
+			}
+			if p.ActivePaths < enabled {
+				return fmt.Errorf("active paths must cover enabled ISPs")
+			}
+		}
 		if p.ProbeScope != "" && p.ProbeScope != "auto" && p.ProbeScope != "shared" && p.ProbeScope != "target" {
 			return fmt.Errorf("invalid probe scope")
 		}

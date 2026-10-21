@@ -11,6 +11,9 @@ func validFrame(f Frame) bool {
 		return false
 	}
 	for _, r := range f.Routes {
+		if !bounded(r.ProfileID, 48) || !bounded(r.Egress, 48) {
+			return false
+		}
 		if !bounded(r.BuildSHA256, 64) {
 			return false
 		}
@@ -36,6 +39,9 @@ func validFrame(f Frame) bool {
 			return false
 		}
 		for _, c := range d.Candidates {
+			if !bounded(c.Egress, 48) {
+				return false
+			}
 			if !bounded(c.Route, 48) || !bounded(c.Engine, 80) || !bounded(c.Reason, 64) || !bounded(c.Group, 48) || !bounded(c.SpeedSource, 48) || !bounded(c.Formula, 48) || len(c.Factors) > 4 {
 				return false
 			}

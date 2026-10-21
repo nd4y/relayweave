@@ -20,6 +20,8 @@ healthy paths, preferring distinct server IPs over a shared upstream balancer.
   engine versions can coexist. Other engines can be added through the adapter interface.
 - Health checks, bounded retries/backoff, last-good recovery and draining of existing sessions.
 - IP-diversity preference: overlapping observed server-IP sets form a shared group.
+- [Proxy + ISP paths](docs/dualwan.md): source-bound Xray routes, weighted lane
+  selection and disabled-path fencing; requires strict host/router routing.
 - React Flow traffic map, browser-side ELK layout, profile expansion and recorded
   selection reasons. Wide compact cards include speed/RTT history, fullscreen and collapsible filters.
 - Prometheus metrics, structured logs, optional Loki and dashboards for an external Grafana.

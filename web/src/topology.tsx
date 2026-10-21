@@ -30,6 +30,10 @@ import { routeHistories, type TrafficPoint } from "./topology-series";
 import { ipGroups } from "./topology-groups";
 
 type Candidate = {
+  egress?: string;
+  egress_weight?: number;
+  egress_active?: number;
+  egress_effective_weight?: number;
   route: string;
   engine: string;
   active: number;
@@ -84,6 +88,8 @@ type Decision = {
   prepared_at: string;
 };
 type Route = {
+  profile_id?: string;
+  egress?: string;
   id: string;
   engine: string;
   core: string;
@@ -167,6 +173,8 @@ export type Edge = {
 };
 const reason: Record<string, string> = {
   selected_by_policy: "Выбран действующей политикой",
+  isp_weighted_path_selected:
+    "Выбрана пара прокси + ISP по весу и числу активных соединений",
   target_connect_failed: "Не удалось установить транспортное соединение",
   probe_failed: "Проверка назначения политики не пройдена",
   early_transport_close: "Туннель рано закрыт без ответа; причина неизвестна",
@@ -650,7 +658,8 @@ export function TrafficTopology({
             const id = "profile:" + r.worker + ":" + r.engine;
             nodes.set(id, {
               id,
-              label: r.id,
+              label:
+                (r.egress ? r.egress + " · " : "") + (r.profile_id || r.id),
               type: "профиль",
               lane: 4,
               row: r,
@@ -1319,7 +1328,9 @@ export function TrafficTopology({
                         onClick={() =>
                           choose({
                             id: r.worker + ":" + r.id,
-                            label: r.id,
+                            label:
+                              (r.egress ? r.egress + " · " : "") +
+                              (r.profile_id || r.id),
                             type: "профиль",
                             lane: 4,
                             row: r,
@@ -1534,7 +1545,9 @@ export function TrafficTopology({
                 </Typography>
                 <Typography>
                   Сервер: {selected.row.server_host || "неизвестен"}. A/AAAA:{" "}
-                  {selected.row.server_ips.join(", ") || "неизвестны"}. DNS:{" "}
+                  {selected.row.server_ips.join(", ") || "неизвестны"}. ISP:{" "}
+                  {selected.row.egress || "системный маршрут"}. Профиль:{" "}
+                  {selected.row.profile_id || selected.row.id}. DNS:{" "}
                   {selected.row.dns_at.startsWith("0001")
                     ? "возраст неизвестен"
                     : at(selected.row.dns_at)}
@@ -1677,6 +1690,7 @@ export function TrafficTopology({
                           <TableCell>
                             {c.route}
                             {c.route === decision.selected ? " ✓" : ""}
+                            {c.egress ? " · " + c.egress : ""}
                             <br />
                             {c.group}
                           </TableCell>
@@ -1685,6 +1699,14 @@ export function TrafficTopology({
                               ? "не сравнивался"
                               : metric(c.score, 3)}{" "}
                             / {c.active}
+                            {!!c.egress_weight && (
+                              <Typography variant="caption" display="block">
+                                ISP {c.egress}: вес {c.egress_weight},
+                                соединений {c.egress_active ?? 0}, эффективный
+                                вес{" "}
+                                {metric(c.egress_effective_weight ?? null, 2)}
+                              </Typography>
+                            )}
                             {c.score !== undefined && (
                               <Typography variant="caption" display="block">
                                 RTT {metric(c.effective_rtt_ms ?? null)} ms ·

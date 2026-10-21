@@ -45,6 +45,7 @@ type policyState struct {
 	best             []*Route
 	chosen           string
 	changed          time.Time
+	egressCredit     map[string]float64
 }
 type Runtime struct {
 	ctx          context.Context
@@ -103,6 +104,10 @@ func (r *Runtime) Listener(id string) (config.Listener, bool) {
 	return config.Listener{}, false
 }
 func fingerprint(v config.Route) string {
+	if v.EgressID != "" {
+		sum := sha256.Sum256(append([]byte(v.Fingerprint+"/"+v.EgressID+"/"), v.Outbound...))
+		return hex.EncodeToString(sum[:])
+	}
 	if v.Fingerprint != "" {
 		return v.Fingerprint
 	}
@@ -135,8 +140,12 @@ func (r *Runtime) Restrict(c config.Config) {
 }
 func (r *Runtime) permitted(policy string, v config.Route) bool {
 	if r.liveGuard != nil {
-		permit, ok := r.liveGuard.Routes[v.ID]
-		if !ok || permit.Fingerprint != fingerprint(v) || !time.Now().Before(permit.ValidUntil) {
+		permit, ok := r.liveGuard.Routes[v.Profile()]
+		expected := fingerprint(v)
+		if v.EgressID != "" {
+			expected = v.Fingerprint
+		}
+		if !ok || permit.Fingerprint != expected || !time.Now().Before(permit.ValidUntil) {
 			return false
 		}
 	}
@@ -225,6 +234,9 @@ func (r *Runtime) ensure(ctx context.Context, c config.Config, route config.Rout
 	}
 	e := &engineEntry{route: &Route{Config: route, Instance: manager.Instances[binary.ID]}, manager: manager, cancel: cancel, key: key, started: time.Now(), used: time.Now(), slot: slot}
 	e.route.CeilingBPS = int64(c.DownloadMbps) * 125000
+	if path, ok := c.Egress(route.EgressID); ok {
+		e.route.CeilingBPS = int64(path.DownloadMbps) * 125000
+	}
 	r.mu.Lock()
 	r.entries[key] = e
 	r.mu.Unlock()
@@ -478,7 +490,7 @@ func (r *Runtime) rebuildLocked() {
 			groups := map[string]bool{}
 			endpointGroups := r.endpointGroupsLocked(candidates, now)
 			for index, v := range candidates {
-				key := endpointGroups[index]
+				key := endpointGroups[index] + "/" + v.Config.EgressID
 				if key != "" && groups[key] {
 					p.topologyFactors[v.Config.ID] = "shared_balancer_deprioritized"
 					rest = append(rest, v)
@@ -492,6 +504,19 @@ func (r *Runtime) rebuildLocked() {
 				}
 			}
 			candidates = append(diverse, rest...)
+		}
+		if len(r.config.EgressPaths) > 0 && (p.config.Mode == "auto" || p.config.Mode == "throughput" || p.config.Mode == "round-robin") {
+			first, rest := []*Route{}, []*Route{}
+			seen := map[string]bool{}
+			for _, v := range candidates {
+				if !seen[v.Config.EgressID] {
+					first = append(first, v)
+					seen[v.Config.EgressID] = true
+				} else {
+					rest = append(rest, v)
+				}
+			}
+			candidates = append(first, rest...)
 		}
 		p.best = append([]*Route(nil), candidates[:limit]...)
 	}
@@ -578,6 +603,9 @@ func (r *Runtime) candidatesObserved(key string, decision *topology.Decision) (r
 	}
 	if decision != nil {
 		decision.Mode = mode
+	}
+	if p != nil && len(r.config.EgressPaths) > 0 && (mode == "auto" || mode == "throughput" || mode == "round-robin") {
+		return r.selectEgressLocked(p, out, decision)
 	}
 	switch mode {
 	case "manual":
@@ -722,7 +750,7 @@ func (v *Route) scoreObserved(mode string, evidence *topology.Candidate) float64
 		if evidence == nil {
 			return
 		}
-		*evidence = topology.Candidate{Route: v.Config.ID, Engine: v.Config.Core, Active: active, Reason: "compared", SpeedBPS: probeSpeed, MeasurementAt: probeAt, EffectiveRTTMS: rtt, ConsecutiveFailures: failures, ErrorEWMA: errors, SpeedUsedBPS: usedSpeed, SpeedSource: source, PassiveAt: passiveAt, CeilingBPS: v.CeilingBPS, Formula: formula}
+		*evidence = topology.Candidate{Egress: v.Config.EgressID, Route: v.Config.ID, Engine: v.Config.Core, Active: active, Reason: "compared", SpeedBPS: probeSpeed, MeasurementAt: probeAt, EffectiveRTTMS: rtt, ConsecutiveFailures: failures, ErrorEWMA: errors, SpeedUsedBPS: usedSpeed, SpeedSource: source, PassiveAt: passiveAt, CeilingBPS: v.CeilingBPS, Formula: formula}
 		if fallbackRTT {
 			evidence.Factors = append(evidence.Factors, "insufficient_observation")
 		}

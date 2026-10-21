@@ -29,6 +29,7 @@ import {
   Divider,
   Drawer,
   Fade,
+  FormControlLabel,
   IconButton,
   InputAdornment,
   LinearProgress,
@@ -39,6 +40,7 @@ import {
   Paper,
   Snackbar,
   Stack,
+  Switch,
   Tab,
   Tabs,
   TextField,
@@ -2536,6 +2538,130 @@ function Settings({
             >
               <Stack spacing={3}>
                 <Typography variant="h6">Параметры воркера</Typography>
+                <Typography variant="h6">Каналы ISP</Typography>
+                <Alert severity="info">
+                  Каждый путь - локальный исходящий IP и отдельный ISP. Адрес
+                  должен существовать в сети воркера, а роутер должен строго
+                  направлять его через нужный канал. Сохранение настроек не
+                  меняет сеть и не включает WAN. После сохранения примените
+                  конфигурацию.
+                </Alert>
+                {(data.egress_paths || []).map((path: any, index: number) => {
+                  const update = (key: string, value: any) =>
+                    set(
+                      "egress_paths",
+                      data.egress_paths.map((p: any, i: number) =>
+                        i === index ? { ...p, [key]: value } : p,
+                      ),
+                    );
+                  return (
+                    <Box
+                      key={index}
+                      sx={{
+                        border: 1,
+                        borderColor: "divider",
+                        borderRadius: 2,
+                        p: 2,
+                      }}
+                    >
+                      <Stack spacing={2}>
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              checked={!!path.enabled}
+                              onChange={(_, value) => update("enabled", value)}
+                            />
+                          }
+                          label={
+                            path.enabled
+                              ? "Доступен для выбора"
+                              : "Отключён - без соединений и проверок"
+                          }
+                        />
+                        <Box className="two-col">
+                          <TextField
+                            label="Идентификатор ISP"
+                            value={path.id}
+                            onChange={(e) => update("id", e.target.value)}
+                            required
+                          />
+                          <TextField
+                            label="Название"
+                            value={path.name}
+                            onChange={(e) => update("name", e.target.value)}
+                          />
+                          <TextField
+                            label="Исходящий IP (sendThrough)"
+                            value={path.source_ip}
+                            onChange={(e) =>
+                              update("source_ip", e.target.value)
+                            }
+                            required
+                          />
+                          <TextField
+                            label="Вес новых соединений"
+                            type="number"
+                            value={path.weight}
+                            onChange={(e) =>
+                              update("weight", Number(e.target.value))
+                            }
+                            slotProps={{ htmlInput: { min: 1, max: 1000 } }}
+                          />
+                          <TextField
+                            label="Загрузка ISP, Мбит/с"
+                            type="number"
+                            value={path.download_mbps}
+                            onChange={(e) =>
+                              update("download_mbps", Number(e.target.value))
+                            }
+                          />
+                          <TextField
+                            label="Отдача ISP, Мбит/с"
+                            type="number"
+                            value={path.upload_mbps}
+                            onChange={(e) =>
+                              update("upload_mbps", Number(e.target.value))
+                            }
+                          />
+                        </Box>
+                        <Button
+                          color="error"
+                          sx={{ alignSelf: "start" }}
+                          onClick={() =>
+                            set(
+                              "egress_paths",
+                              data.egress_paths.filter(
+                                (_: any, i: number) => i !== index,
+                              ),
+                            )
+                          }
+                        >
+                          Удалить путь {path.id}
+                        </Button>
+                      </Stack>
+                    </Box>
+                  );
+                })}
+                <Button
+                  sx={{ alignSelf: "start" }}
+                  disabled={(data.egress_paths || []).length >= 4}
+                  onClick={() =>
+                    set("egress_paths", [
+                      ...(data.egress_paths || []),
+                      {
+                        id: "isp" + ((data.egress_paths || []).length + 1),
+                        name: "",
+                        source_ip: "",
+                        enabled: false,
+                        weight: 1,
+                        download_mbps: 100,
+                        upload_mbps: 100,
+                      },
+                    ])
+                  }
+                >
+                  Добавить канал ISP
+                </Button>
                 <Box className="two-col">
                   <TextField
                     label="Xray по умолчанию"

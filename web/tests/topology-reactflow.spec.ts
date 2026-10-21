@@ -138,6 +138,35 @@ async function fixture(page: Page, value = snapshot()) {
   ).toHaveCount(0);
 }
 
+test("ISP paths remain visible inside shared server IP groups", async ({ page }) => {
+  const value = snapshot();
+  value.workers[0].routes.forEach((r, i) => Object.assign(r, { egress: i === 1 ? "isp2" : "isp1", profile_id: "profile-" + r.id }));
+  await fixture(page, value);
+  const flow = page.getByTestId("topology-flow");
+  const shared = flow.locator(".react-flow__node").filter({ has: page.locator('[data-model-id="ip-group:203.0.113.10|203.0.113.11"]') });
+  await expect(shared).toContainText("isp1 / isp2");
+  await shared.getByRole("button", { name: "Раскрыть профили (3)" }).click();
+  await expect(flow.locator('[data-model-id^="profile:"]').filter({ hasText: "isp2 · demo-route-2.invalid" })).toHaveCount(1);
+});
+
+test("ISP settings preserve a disabled path and submit explicit source bindings", async ({ page }) => {
+  await fixture(page);
+  const item = { kind: "settings", id: "global", version: 1, name: "Global", data: { default_core: "26.10.17", udp_advertise: "auto", udp_port_min: 31000, udp_port_max: 31255, offline_lease_seconds: 86400, proxy_bind: "0.0.0.0", download_mbps: 800, upload_mbps: 500, egress_paths: [ { id: "isp1", name: "Primary", source_ip: "192.0.2.11", enabled: false, weight: 8, download_mbps: 760, upload_mbps: 760 }, { id: "isp2", name: "Secondary", source_ip: "192.0.2.12", enabled: true, weight: 5, download_mbps: 475, upload_mbps: 475 } ] } };
+  let submitted: any;
+  await page.route("**/api/v1/settings**", async route => {
+    if (route.request().method() === "PATCH") { submitted = route.request().postDataJSON(); return route.fulfill({ json: { ...item, version: 2 } }); }
+    return route.fulfill({ json: { items: [item], total: 1 } });
+  });
+  await page.goto("/#settings");
+  await expect(page.getByText("Каналы ISP", { exact: true })).toBeVisible();
+  const switches = page.getByRole("switch");
+  await expect(switches.nth(0)).not.toBeChecked();
+  await expect(switches.nth(1)).toBeChecked();
+  await page.getByRole("button", { name: "Сохранить настройки", exact: true }).click();
+  await expect.poll(() => submitted?.data.egress_paths[1].source_ip).toBe("192.0.2.12");
+  expect(submitted.data.egress_paths[0].enabled).toBe(false);
+});
+
 test("IP overlap groups, expansion, decision evidence, pagination and unknown addresses", async ({
   page,
 }) => {

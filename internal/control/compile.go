@@ -194,6 +194,7 @@ func (s *Server) compile(ctx context.Context, generation int64, blueprint map[st
 	c.Generation = generation
 	c.DownloadMbps = settings.DownloadMbps
 	c.UploadMbps = settings.UploadMbps
+	c.EgressPaths = settings.EgressPaths
 	c.ProbeURL = "https://www.gstatic.com/generate_204"
 	sources, _, e := s.Store.List(ctx, "sources", 1000, 0)
 	if e != nil {
@@ -320,6 +321,9 @@ func (s *Server) compile(ctx context.Context, generation int64, blueprint map[st
 		if !found {
 			return Revision{}, errCode("core_version_not_installed_or_approved")
 		}
+	}
+	if e = c.ExpandEgress(); e != nil {
+		return Revision{}, errCode("egress_config_invalid")
 	}
 	if e = c.Validate(); e != nil {
 		return Revision{}, errCode("compiled_config_invalid")

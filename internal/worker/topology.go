@@ -12,7 +12,7 @@ import (
 )
 
 func candidateEvidence(v *Route, score *float64, reason string) topology.Candidate {
-	return topology.Candidate{Route: v.Config.ID, Engine: v.Config.Core, Active: v.Active.Load(), Score: score, Reason: reason, SpeedBPS: v.SpeedBPS.Load(), MeasurementAt: v.LastSpeed.Load()}
+	return topology.Candidate{Egress: v.Config.EgressID, Route: v.Config.ID, Engine: v.Config.Core, Active: v.Active.Load(), Score: score, Reason: reason, SpeedBPS: v.SpeedBPS.Load(), MeasurementAt: v.LastSpeed.Load()}
 }
 
 // Called inside the selector lock before returning. Scores are only reported
@@ -20,7 +20,7 @@ func candidateEvidence(v *Route, score *float64, reason string) topology.Candida
 func (r *Runtime) captureCandidatesLocked(p *policyState, result []*Route, d *topology.Decision, now time.Time) {
 	if p != nil {
 		d.Mode = p.config.Mode
-		if d.Method != "deterministic_two_choice" {
+		if d.Method != "deterministic_two_choice" && d.Method != "isp_weighted_path_choice" {
 			d.Method = p.config.Mode
 		}
 	}
@@ -180,7 +180,7 @@ func (r *Runtime) TopologyFrame(g *Gateway) *topology.Frame {
 		if !safeTopologyID(source) {
 			source = "unknown"
 		}
-		f.Routes = append(f.Routes, topology.Route{ID: v.Config.ID, Engine: keys[i], Core: v.Config.Core, Version: v.Instance.Config.Version, BuildSHA256: v.Instance.SHA256, Subscription: source, ServerHost: safeTopologyHost(endpointHost(v)), ServerIPs: append([]string{}, r.routeIPsLocked(v, f.At)...), DNSAt: r.endpointIPs[endpointHost(v)].Observed, Group: groups[i], State: state, Active: v.Active.Load(), Connections: v.Connections.Load(), Failures: v.Failures.Load(), Up: v.BytesUp.Load(), Down: v.BytesDown.Load(), SpeedBPS: v.SpeedBPS.Load(), MeasurementAt: v.LastSpeed.Load(), RTTUS: v.RTTUS.Load(), ValidUntil: r.valid[v.Config.ID]})
+		f.Routes = append(f.Routes, topology.Route{ProfileID: v.Config.Profile(), Egress: v.Config.EgressID, ID: v.Config.ID, Engine: keys[i], Core: v.Config.Core, Version: v.Instance.Config.Version, BuildSHA256: v.Instance.SHA256, Subscription: source, ServerHost: safeTopologyHost(endpointHost(v)), ServerIPs: append([]string{}, r.routeIPsLocked(v, f.At)...), DNSAt: r.endpointIPs[endpointHost(v)].Observed, Group: groups[i], State: state, Active: v.Active.Load(), Connections: v.Connections.Load(), Failures: v.Failures.Load(), Up: v.BytesUp.Load(), Down: v.BytesDown.Load(), SpeedBPS: v.SpeedBPS.Load(), MeasurementAt: v.LastSpeed.Load(), RTTUS: v.RTTUS.Load(), ValidUntil: r.valid[v.Config.ID]})
 	}
 	for i, l := range r.config.Listeners {
 		if i >= 64 {

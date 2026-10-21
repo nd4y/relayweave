@@ -45,7 +45,7 @@ const RouteCard = memo(function RouteCard({
   const group = n.type === "группа серверных IP";
   const name =
     n.type === "профиль" && n.row
-      ? `${n.row.server_host || "Профиль"} · ${n.row.id.slice(0, 8)}`
+      ? `${n.row.egress ? n.row.egress + " · " : ""}${n.row.server_host || "Профиль"} · ${(n.row.profile_id || n.row.id).slice(0, 8)}`
       : n.label;
   const invalid =
     n.members?.filter((r) => r.state === "core_not_ready").length || 0;
@@ -83,6 +83,7 @@ const RouteCard = memo(function RouteCard({
         <Box className="rw-card-heading">
           <Typography variant="body2" color="text.secondary">
             {n.type}
+            {n.members?.some(r => r.egress) ? " · " + [...new Set(n.members.map(r => r.egress).filter(Boolean))].join(" / ") : ""}
             {n.type === "профиль" && n.row ? ` · ${n.row.version}` : ""}
           </Typography>
           <Tooltip title={n.label} enterDelay={350}>

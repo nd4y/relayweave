@@ -1,5 +1,8 @@
 # RelayWeave
 
+Балансировка по паре «прокси + ISP», настройка исходящих адресов и ограничения
+`sendThrough` описаны в [руководстве DualWAN](docs/dualwan.md).
+
 [English](README.md) | **Русский**
 
 **Your routes. In harmony.**

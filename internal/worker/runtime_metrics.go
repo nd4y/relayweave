@@ -68,7 +68,7 @@ func (r *Runtime) Status(g *Gateway) map[string]any {
 		} else if !r.entryReadyLocked(e) {
 			state = "reserve_or_blocked"
 		}
-		engines = append(engines, map[string]any{"id": e.key, "profile_id": v.Config.ID, "core": v.Config.Core, "version": v.Instance.Config.Version, "sha256": v.Instance.SHA256, "pid": v.Instance.PID.Load(), "ready": r.entryReadyLocked(e), "healthy": v.Instance.Ready.Load(), "state": state, "starts": v.Instance.Starts.Load(), "restarts": v.Instance.Restarts.Load(), "connections": v.Connections.Load(), "active": v.Active.Load(), "failures": v.Failures.Load(), "health_requests": v.Instance.HealthRequests.Load(), "rtt_ms": float64(v.RTTUS.Load()) / 1000, "probe_rtt_ms": float64(v.Instance.LatencyUS.Load()) / 1000, "probe_samples": v.Instance.ProbeSamples.Load(), "last_probe_at": v.Instance.LastProbe.Load(), "samples": v.Samples.Load(), "speed_bps": v.SpeedBPS.Load(), "speed_sample_at": v.LastSpeed.Load(), "speed_confidence": "bounded_active_sample", "passive_goodput_bps": v.PassiveBPS.Load(), "passive_capacity_claim": false, "circuit_until": v.BlockedUntil.Load(), "bytes_up": v.BytesUp.Load(), "bytes_down": v.BytesDown.Load()})
+		engines = append(engines, map[string]any{"id": e.key, "profile_id": v.Config.Profile(), "route_id": v.Config.ID, "egress": v.Config.EgressID, "core": v.Config.Core, "version": v.Instance.Config.Version, "sha256": v.Instance.SHA256, "pid": v.Instance.PID.Load(), "ready": r.entryReadyLocked(e), "healthy": v.Instance.Ready.Load(), "state": state, "starts": v.Instance.Starts.Load(), "restarts": v.Instance.Restarts.Load(), "connections": v.Connections.Load(), "active": v.Active.Load(), "failures": v.Failures.Load(), "health_requests": v.Instance.HealthRequests.Load(), "rtt_ms": float64(v.RTTUS.Load()) / 1000, "probe_rtt_ms": float64(v.Instance.LatencyUS.Load()) / 1000, "probe_samples": v.Instance.ProbeSamples.Load(), "last_probe_at": v.Instance.LastProbe.Load(), "samples": v.Samples.Load(), "speed_bps": v.SpeedBPS.Load(), "speed_sample_at": v.LastSpeed.Load(), "speed_confidence": "bounded_active_sample", "passive_goodput_bps": v.PassiveBPS.Load(), "passive_capacity_claim": false, "circuit_until": v.BlockedUntil.Load(), "bytes_up": v.BytesUp.Load(), "bytes_down": v.BytesDown.Load()})
 		engines[len(engines)-1]["server_ips"] = r.routeIPsLocked(v, time.Now())
 		engines[len(engines)-1]["server_ips_observed_at"] = r.endpointIPs[endpointHost(v)].Observed
 	}
@@ -88,7 +88,7 @@ func (r *Runtime) Status(g *Gateway) map[string]any {
 		policies = append(policies, map[string]any{"id": id, "mode": p.config.Mode, "ready_paths": paths, "catalog_size": len(p.config.Routes), "probe_budget_remaining_bytes": max(int64(0), p.config.ProbeBudgetBytes-used)})
 		policies[len(policies)-1]["probe_scope"] = p.config.ProbeScope
 	}
-	return map[string]any{"architecture": runtime.GOARCH, "cores": engines, "routes": engines, "policies": policies, "catalog_size": len(r.config.Routes), "active_connections": g.active.Load(), "udp_associations": g.udpActive.Load(), "udp_drops": g.udpDrops.Load(), "udp_packets": g.udpPackets.Load(), "drained": r.drained.Load(), "lease_until": r.lease.Load(), "probe_bytes": r.probeBytes.Load(), "probe_budget_reserved_bytes": r.reservedProbeBudgetLocked(), "probe_budget_day": r.probeWindow.UTC().Truncate(24 * time.Hour).Format("2006-01-02"), "payload_bytes_up": up, "payload_bytes_down": down}
+	return map[string]any{"egress_paths": r.config.EgressPaths, "architecture": runtime.GOARCH, "cores": engines, "routes": engines, "policies": policies, "catalog_size": len(r.config.Routes), "active_connections": g.active.Load(), "udp_associations": g.udpActive.Load(), "udp_drops": g.udpDrops.Load(), "udp_packets": g.udpPackets.Load(), "drained": r.drained.Load(), "lease_until": r.lease.Load(), "probe_bytes": r.probeBytes.Load(), "probe_budget_reserved_bytes": r.reservedProbeBudgetLocked(), "probe_budget_day": r.probeWindow.UTC().Truncate(24 * time.Hour).Format("2006-01-02"), "payload_bytes_up": up, "payload_bytes_down": down}
 }
 func (r *Runtime) Metrics(output io.Writer) {
 	var buffer bytes.Buffer
@@ -98,6 +98,13 @@ func (r *Runtime) Metrics(output io.Writer) {
 		defer r.mu.RUnlock()
 		w := &buffer
 		ready := 0
+		for _, p := range r.config.EgressPaths {
+			enabled := 0
+			if p.Enabled {
+				enabled = 1
+			}
+			fmt.Fprintf(w, "proxy_isp_enabled{isp=%q} %d\nproxy_isp_weight{isp=%q} %d\nproxy_isp_download_limit_bytes_per_second{isp=%q} %d\n", p.ID, enabled, p.ID, p.Weight, p.ID, p.DownloadMbps*125000)
+		}
 		up, down := r.retiredUp.Load(), r.retiredDown.Load()
 		fmt.Fprintf(w, "proxy_engine_processes %d\nproxy_catalog_profiles %d\nproxy_offline_lease_until_seconds %d\nproxy_probe_bytes_total %d\n", len(r.entries), len(r.config.Routes), r.lease.Load(), r.probeBytes.Load())
 		fmt.Fprintf(w, "proxy_probe_budget_reserved_bytes %d\n", r.reservedProbeBudgetLocked())
@@ -105,6 +112,7 @@ func (r *Runtime) Metrics(output io.Writer) {
 		for _, e := range r.entries {
 			v := e.route
 			processes[e.key] = v.Instance.PID.Load()
+			fmt.Fprintf(w, "proxy_route_egress_info{route=%q,engine=%q,profile=%q,isp=%q} 1\n", v.Config.ID, e.key, v.Config.Profile(), v.Config.EgressID)
 			healthy := 0
 			if v.Instance.Ready.Load() {
 				healthy = 1

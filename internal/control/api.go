@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"proxyplatform/internal/catalog"
+	"proxyplatform/internal/config"
 	"proxyplatform/internal/store"
 )
 
@@ -360,7 +361,7 @@ func (s *Server) validate(kind string, patch json.RawMessage, old *store.Object)
 		"profiles":   "enabled core_version",
 		"policies":   "mode pool_id active_paths warm_reserve sticky_seconds rotation_seconds probe_interval_seconds probe_url probe_scope probe_fallback_urls speed_url probe_budget_bytes max_connections connect_timeout_ms fail_closed",
 		"listeners":  "protocol listen policy_id username password udp enabled allow_cidrs",
-		"settings":   "default_core udp_advertise udp_port_min udp_port_max offline_lease_seconds download_mbps upload_mbps proxy_bind",
+		"settings":   "default_core udp_advertise udp_port_min udp_port_max offline_lease_seconds download_mbps upload_mbps proxy_bind egress_paths",
 	}
 	for _, key := range strings.Fields(fields[kind]) {
 		allowed[key] = true
@@ -530,6 +531,9 @@ func (s *Server) validate(kind string, patch json.RawMessage, old *store.Object)
 		}
 	case "settings":
 		v, e := catalog.Decode[catalog.Settings](b)
+		if config.ValidateEgressPaths(v.EgressPaths) != nil {
+			return nil, errCode("egress_config_invalid")
+		}
 		if !coreSelector.MatchString(v.DefaultCore) {
 			return nil, errCode("invalid_core_version")
 		}

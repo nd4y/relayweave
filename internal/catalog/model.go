@@ -3,6 +3,7 @@ package catalog
 import (
 	"encoding/json"
 	"fmt"
+	"proxyplatform/internal/config"
 	"regexp"
 	"strings"
 	"time"
@@ -268,14 +269,15 @@ type Listener struct {
 	AllowCIDRs []string `json:"allow_cidrs"`
 }
 type Settings struct {
-	DefaultCore         string `json:"default_core"`
-	UDPAdvertise        string `json:"udp_advertise"`
-	UDPPortMin          int    `json:"udp_port_min"`
-	UDPPortMax          int    `json:"udp_port_max"`
-	OfflineLeaseSeconds int    `json:"offline_lease_seconds"`
-	DownloadMbps        int    `json:"download_mbps"`
-	UploadMbps          int    `json:"upload_mbps"`
-	ProxyBind           string `json:"proxy_bind"`
+	EgressPaths         []config.EgressPath `json:"egress_paths,omitempty"`
+	DefaultCore         string              `json:"default_core"`
+	UDPAdvertise        string              `json:"udp_advertise"`
+	UDPPortMin          int                 `json:"udp_port_min"`
+	UDPPortMax          int                 `json:"udp_port_max"`
+	OfflineLeaseSeconds int                 `json:"offline_lease_seconds"`
+	DownloadMbps        int                 `json:"download_mbps"`
+	UploadMbps          int                 `json:"upload_mbps"`
+	ProxyBind           string              `json:"proxy_bind"`
 }
 
 func Decode[T any](data json.RawMessage) (T, error) {
