@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "enabled": false,
+  "listen": "127.0.0.1:18530",
+  "token_file": "/config/consumer-token",
+  "poll_seconds": 2,
+  "stale_after_seconds": 10,
+  "routers": [{
+    "id": "home",
+    "driver": "mikrotik-api-ssl",
+    "enabled": false,
+    "endpoint": "192.0.2.1:8729",
+    "server_name": "router.example.net",
+    "ca_file": "/config/router-ca.pem",
+    "username": "relayweave-telemetry",
+    "password_file": "/config/router-password",
+    "wans": [
+      {"id": "wan1", "isp": "isp1", "interface": "ether1"},
+      {"id": "wan2", "isp": "isp2", "interface": "pppoe-out1"}
+    ]
+  }]
+}

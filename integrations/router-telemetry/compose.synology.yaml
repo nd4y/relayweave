@@ -1,0 +1,34 @@
+# Standalone DSM variant; use instead of compose.yaml, not as an overlay.
+# CPU shares are relative priority, not a hard utilization ceiling.
+name: relayweave-router-telemetry
+services:
+  router-telemetry:
+    profiles: [router-telemetry]
+    image: ${ROUTER_TELEMETRY_IMAGE:-relayweave-router-telemetry:local}
+    build:
+      context: ../..
+      dockerfile: integrations/router-telemetry/Dockerfile
+    # Linux host network allows loopback-only delivery to a local consumer.
+    # No NAT port translation: the process and host both use 18530 by default.
+    network_mode: host
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    stop_grace_period: 5s
+    cpu_shares: 64
+    mem_limit: 48m
+    pids_limit: 16
+    volumes:
+      - ${ROUTER_TELEMETRY_CONFIG_DIR:?Set a protected absolute config directory}:/config:ro
+    healthcheck:
+      test: [CMD, /app/router-telemetry, -healthcheck]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
