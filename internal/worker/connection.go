@@ -1,0 +1,155 @@
+package worker
+
+import (
+	"golang.org/x/sys/unix"
+	"net"
+	"proxyplatform/internal/topology"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+// Linux TCP state values used by TCP_INFO (include/net/tcp_states.h).
+const (
+	tcpTimeWait  = 6
+	tcpCloseWait = 8
+	tcpLastAck   = 9
+	tcpClosing   = 11
+)
+
+// Embedding TCPConn retains its ReadFrom/WriteTo methods and Linux splice path.
+// Only socket lifetime is intercepted; payload bytes do not pass through a Go wrapper.
+type routeConn struct {
+	*net.TCPConn
+	route              *Route
+	once               sync.Once
+	mu                 sync.Mutex
+	gateway            *Gateway
+	up                 uint64
+	down               uint64
+	err                error
+	release            func()
+	windowStart        time.Time
+	windowDown         uint64
+	receiveWindow      uint32
+	openedAt           time.Time
+	initialUp          uint64
+	initialDown        uint64
+	baselineValid      bool
+	peerFIN            bool
+	topologyGeneration int64
+	topologyPolicy     string
+	topologyListener   string
+	topologyProtocol   string
+	topologyFlow       string
+	topologyEngine     string
+	topologyEarly      atomic.Bool
+}
+
+func (c *routeConn) checkEarlyFailure() {
+	c.sample()
+	c.mu.Lock()
+	suspect := c.baselineValid && time.Since(c.openedAt) <= 5*time.Second && c.up > c.initialUp && c.down == c.initialDown
+	c.mu.Unlock()
+	if suspect && c.route.Instance != nil {
+		if c.gateway != nil && c.gateway.Topology != nil && c.topologyEarly.CompareAndSwap(false, true) {
+			c.gateway.Topology.Offer(topology.Decision{Generation: c.topologyGeneration, Policy: c.topologyPolicy, Listener: c.topologyListener, Protocol: c.topologyProtocol, FlowID: c.topologyFlow, Attempted: c.route.Config.ID, Engine: c.topologyEngine, Reason: "early_transport_close", Method: "tcp_info_no_response_before_early_close", Truncated: true})
+		}
+		c.route.Instance.RequestHealthCheck()
+	}
+}
+
+func (c *routeConn) Close() error {
+	c.once.Do(func() {
+		c.checkEarlyFailure()
+		c.err = c.TCPConn.Close()
+		c.gateway.socketMu.Lock()
+		delete(c.gateway.sockets, c)
+		c.gateway.socketMu.Unlock()
+		c.route.Active.Add(-1)
+		if c.release != nil {
+			c.release()
+		}
+	})
+	return c.err
+}
+func (c *routeConn) info() (uint64, uint64, bool) {
+	raw, e := c.SyscallConn()
+	if e != nil {
+		return 0, 0, false
+	}
+	var info *unix.TCPInfo
+	err := raw.Control(func(fd uintptr) { info, e = unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO) })
+	if err != nil || e != nil || info == nil {
+		return 0, 0, false
+	}
+	up := uint64(0)
+	if info.Bytes_sent >= info.Bytes_retrans {
+		up = info.Bytes_sent - info.Bytes_retrans
+	}
+	c.receiveWindow = info.Rcv_wnd
+	// Linux advances bytes_received for the peer's FIN sequence number too.
+	// Observe it before the socket reaches CLOSE and retain that observation;
+	// a FIN is neither response payload nor evidence that an upstream worked.
+	switch info.State {
+	case tcpCloseWait, tcpClosing, tcpLastAck, tcpTimeWait:
+		c.peerFIN = true
+	}
+	down := info.Bytes_received
+	if c.peerFIN && down > 0 {
+		down--
+	}
+	return up, down, true
+}
+func (c *routeConn) baseline() {
+	c.up, c.down, c.baselineValid = c.info()
+	c.initialUp, c.initialDown = c.up, c.down
+	c.openedAt = time.Now()
+	c.windowStart = time.Now()
+	c.windowDown = c.down
+}
+func (c *routeConn) sample() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	up, down, ok := c.info()
+	if !ok {
+		return
+	}
+	if up >= c.up {
+		c.route.BytesUp.Add(int64(up - c.up))
+	}
+	if down >= c.down {
+		c.route.BytesDown.Add(int64(down - c.down))
+	}
+	c.up, c.down = up, down
+	window := time.Since(c.windowStart)
+	if window >= 250*time.Millisecond && down >= c.windowDown && down-c.windowDown >= 1<<20 {
+		bps := int64(float64(down-c.windowDown) / window.Seconds())
+		c.route.recordDeliveredRate(bps, c.receiveWindow, time.Now())
+		c.windowStart = time.Now()
+		c.windowDown = down
+	} else if window > time.Minute {
+		c.windowStart = time.Now()
+		c.windowDown = down
+	}
+}
+func (g *Gateway) sampleSockets() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-g.ctx.Done():
+			return
+		case <-ticker.C:
+			g.socketMu.Lock()
+			list := make([]*routeConn, 0, len(g.sockets))
+			for c := range g.sockets {
+				list = append(list, c)
+			}
+			g.socketMu.Unlock()
+			for _, c := range list {
+				c.sample()
+			}
+		}
+	}
+}

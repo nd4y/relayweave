@@ -1,0 +1,255 @@
+* {
+  box-sizing: border-box;
+}
+html {
+  scroll-behavior: smooth;
+}
+body {
+  margin: 0;
+}
+button,
+a,
+input {
+  -webkit-tap-highlight-color: transparent;
+}
+a {
+  color: inherit;
+}
+.center-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+.login-layout {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  position: relative;
+  overflow: hidden;
+  padding: 24px;
+  background:
+    radial-gradient(ellipse at 20% 10%, #79609d25, transparent 55%),
+    radial-gradient(ellipse at 85% 85%, #69baad15, transparent 50%);
+}
+.login-card {
+  position: relative;
+  width: 100%;
+  max-width: 460px;
+  padding: 38px;
+  border: 1px solid #9984b335 !important;
+  border-radius: 28px !important;
+  z-index: 1;
+  box-shadow: 0 30px 100px #0002 !important;
+}
+.login-orbit {
+  position: absolute;
+  border: 1px solid #bba4e517;
+  border-radius: 50%;
+  width: 700px;
+  height: 700px;
+  pointer-events: none;
+}
+.orbit-one {
+  left: -220px;
+  top: -250px;
+}
+.orbit-two {
+  right: -280px;
+  bottom: -300px;
+  width: 900px;
+  height: 900px;
+}
+.two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.two-col.wide {
+  gap: 24px;
+}
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 22px;
+}
+.object-card {
+  display: flex;
+  flex-direction: column;
+  transition:
+    box-shadow 0.2s,
+    transform 0.2s;
+}
+.object-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px #00000010;
+}
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px;
+}
+.hero-panel {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 300px;
+  padding: 36px;
+  border-radius: 28px;
+  background: linear-gradient(115deg, #b99aef17, #6bbfb409);
+  border: 1px solid #af8ae42a;
+  overflow: hidden;
+}
+.network-art {
+  position: absolute;
+  width: 320px;
+  height: 260px;
+  right: 32px;
+  top: 20px;
+  color: #c7afff;
+}
+.art-ring {
+  position: absolute;
+  border: 1px dashed #b7a0dd55;
+  border-radius: 50%;
+  width: 220px;
+  height: 220px;
+  left: 50px;
+  top: 20px;
+}
+.ring-b {
+  width: 300px;
+  height: 140px;
+  left: 10px;
+  top: 60px;
+  transform: rotate(-35deg);
+  border-style: solid;
+}
+.art-center {
+  position: absolute;
+  left: 126px;
+  top: 94px;
+  display: grid;
+  place-items: center;
+  background: #ac8cdb28;
+  border: 1px solid #bba0e65c;
+  width: 74px;
+  height: 74px;
+  border-radius: 24px;
+  box-shadow: 0 0 50px #a58ae124;
+}
+.art-node {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border: 1px solid #bfa3ef66;
+  background: #594c6d;
+  border-radius: 16px;
+  color: #e1d1ff;
+  box-shadow: 0 0 25px #ba97ec18;
+}
+.node-a {
+  left: 44px;
+  top: 42px;
+}
+.node-b {
+  right: 17px;
+  top: 78px;
+}
+.node-c {
+  bottom: 1px;
+  left: 139px;
+}
+.quick-step {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 8px;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.quick-step:hover {
+  background: #a58ae114;
+}
+.status-dot {
+  width: 7px;
+  height: 7px;
+  background: #83c8a7;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px #83c8a715;
+}
+.page-enter {
+  animation: pageIn 240ms ease-out;
+}
+@keyframes pageIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-thumb {
+  background: #93849f55;
+  border-radius: 10px;
+}
+@media (max-width: 1300px) {
+  .network-art {
+    opacity: 0.4;
+    right: -70px;
+  }
+  .hero-panel > div:first-child {
+    z-index: 1;
+  }
+  .stat-grid {
+    gap: 12px;
+  }
+}
+@media (max-width: 900px) {
+  .stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .network-art {
+    display: none;
+  }
+  .hero-panel {
+    padding: 26px;
+  }
+  .two-col.wide {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 600px) {
+  .two-col {
+    grid-template-columns: 1fr;
+  }
+  .card-grid {
+    grid-template-columns: 1fr;
+  }
+  .login-card {
+    padding: 26px;
+  }
+  .hero-panel {
+    padding: 24px;
+  }
+  .stat-grid {
+    gap: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

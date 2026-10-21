@@ -1,0 +1,2 @@
+import {defineConfig} from '@playwright/test';
+export default defineConfig({testDir:'./tests',outputDir:process.env.PLAYWRIGHT_OUTPUT_DIR||'/tmp/relayweave-playwright',timeout:120000,expect:{timeout:15000},fullyParallel:false,workers:1,retries:0,use:{baseURL:process.env.BASE_URL||'http://127.0.0.1:18443',locale:'ru-RU',actionTimeout:15000,viewport:{width:1440,height:1000},trace:'retain-on-failure',screenshot:'only-on-failure',headless:true},reporter:[['json',{outputFile:process.env.PLAYWRIGHT_REPORT||'/reports/browser-results.json'}],['line']]});
