@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"strconv"
 	"time"
 )
 
@@ -20,17 +21,22 @@ type Core struct {
 	Binary   string `json:"binary"`
 }
 type Route struct {
-	ProfileID     string          `json:"profile_id,omitempty"`
-	EgressID      string          `json:"egress_id,omitempty"`
-	Fingerprint   string          `json:"fingerprint,omitempty"`
-	UDP           bool            `json:"udp,omitempty"`
-	ID            string          `json:"id"`
-	Core          string          `json:"core"`
-	Endpoint      string          `json:"endpoint"`
-	Outbound      json.RawMessage `json:"outbound"`
-	ValidUntil    time.Time       `json:"valid_until,omitempty"`
-	CapacityGroup string          `json:"capacity_group,omitempty"`
-	ServerHost    string          `json:"server_host,omitempty"`
+	EstablishedOnly  bool             `json:"established_only,omitempty"`
+	ServerAllowCIDRs []string         `json:"server_allow_cidrs,omitempty"`
+	Previous         []RevisionPermit `json:"previous,omitempty"`
+	CheckServer      bool             `json:"check_server,omitempty"`
+	AllowPrivate     bool             `json:"allow_private,omitempty"`
+	ProfileID        string           `json:"profile_id,omitempty"`
+	EgressID         string           `json:"egress_id,omitempty"`
+	Fingerprint      string           `json:"fingerprint,omitempty"`
+	UDP              bool             `json:"udp,omitempty"`
+	ID               string           `json:"id"`
+	Core             string           `json:"core"`
+	Endpoint         string           `json:"endpoint"`
+	Outbound         json.RawMessage  `json:"outbound"`
+	ValidUntil       time.Time        `json:"valid_until,omitempty"`
+	CapacityGroup    string           `json:"capacity_group,omitempty"`
+	ServerHost       string           `json:"server_host,omitempty"`
 }
 type Listener struct {
 	ID         string   `json:"id"`
@@ -69,6 +75,7 @@ type UDP struct {
 	MaxDatagramBytes int    `json:"max_datagram_bytes"`
 }
 type Config struct {
+	UDPProbeTargets      []string     `json:"udp_probe_targets,omitempty"`
 	EgressPaths          []EgressPath `json:"egress_paths,omitempty"`
 	Generation           int64        `json:"generation,omitempty"`
 	DownloadMbps         int          `json:"download_mbps,omitempty"`
@@ -112,6 +119,16 @@ func Decode(r io.Reader) (Config, error) {
 	return c, c.Validate()
 }
 func (c *Config) Validate() error {
+	if len(c.UDPProbeTargets) > 2 {
+		return fmt.Errorf("UDP probe target limit")
+	}
+	for _, target := range c.UDPProbeTargets {
+		host, port, err := net.SplitHostPort(target)
+		n, pe := strconv.Atoi(port)
+		if err != nil || pe != nil || net.ParseIP(host) == nil || n < 1 || n > 65535 {
+			return fmt.Errorf("invalid UDP DNS probe target")
+		}
+	}
 	if err := ValidateEgressPaths(c.EgressPaths); err != nil {
 		return err
 	}
@@ -133,6 +150,12 @@ func (c *Config) Validate() error {
 		cores[v.ID] = true
 	}
 	for _, v := range c.Routes {
+		if err := ValidateServerCIDRs(v.ServerAllowCIDRs); err != nil {
+			return err
+		}
+		if len(v.Previous) > 2 {
+			return fmt.Errorf("route revision overlap limit")
+		}
 		if err := c.ValidateRouteEgress(v); err != nil {
 			return err
 		}

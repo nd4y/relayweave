@@ -25,6 +25,8 @@ import (
 const hotLimit = 16
 const processLimit = 32 // Includes retiring sessions and rollout candidates.
 type engineEntry struct {
+	staged  bool
+	dialIP  string
 	route   *Route
 	manager *core.Manager
 	cancel  context.CancelFunc
@@ -38,6 +40,9 @@ type probePermit struct {
 	until      time.Time
 }
 type policyState struct {
+	autoAt           time.Time
+	autoWeights      map[*Route]float64
+	autoCredit       map[*Route]float64
 	topologyFactors  map[string]string
 	topologyPrepared time.Time
 	rank             map[string]int
@@ -48,35 +53,38 @@ type policyState struct {
 	egressCredit     map[string]float64
 }
 type Runtime struct {
-	ctx          context.Context
-	mu           sync.RWMutex
-	applyMu      sync.Mutex
-	config       config.Config
-	entries      map[string]*engineEntry
-	current      map[string]*engineEntry
-	policies     map[string]*policyState
-	valid        map[string]time.Time
-	slots        map[int]bool
-	cursor       atomic.Uint64
-	drained      atomic.Bool
-	lease        atomic.Int64
-	probeBytes   atomic.Int64
-	probeWindow  time.Time
-	budget       map[string]int64
-	visited      map[string]time.Time
-	coldCursor   int
-	constraints  *config.Config
-	liveGuard    *config.LiveGuard
-	allowed      map[string]map[string]string
-	hardExpiry   map[string]time.Time
-	staging      map[string]probePermit
-	admission    map[string]*atomic.Int64
-	rootDir      string
-	retiredUp    atomic.Int64
-	retiredDown  atomic.Int64
-	dnsMu        sync.Mutex
-	endpointIPs  map[string]endpointResolution
-	targetHealth map[string]targetObservation
+	restoreRollovers []rolloverRecord
+	rolloverDirty    atomic.Bool
+	rollovers        map[string]*pathRollover
+	ctx              context.Context
+	mu               sync.RWMutex
+	applyMu          sync.Mutex
+	config           config.Config
+	entries          map[string]*engineEntry
+	current          map[string]*engineEntry
+	policies         map[string]*policyState
+	valid            map[string]time.Time
+	slots            map[int]bool
+	cursor           atomic.Uint64
+	drained          atomic.Bool
+	lease            atomic.Int64
+	probeBytes       atomic.Int64
+	probeWindow      time.Time
+	budget           map[string]int64
+	visited          map[string]time.Time
+	coldCursor       int
+	constraints      *config.Config
+	liveGuard        *config.LiveGuard
+	allowed          map[string]map[string]string
+	hardExpiry       map[string]time.Time
+	staging          map[string]probePermit
+	admission        map[string]*atomic.Int64
+	rootDir          string
+	retiredUp        atomic.Int64
+	retiredDown      atomic.Int64
+	dnsMu            sync.Mutex
+	endpointIPs      map[string]endpointResolution
+	targetHealth     map[string]targetObservation
 }
 
 func NewRuntime(ctx context.Context, roots ...string) *Runtime {
@@ -104,6 +112,12 @@ func (r *Runtime) Listener(id string) (config.Listener, bool) {
 	return config.Listener{}, false
 }
 func fingerprint(v config.Route) string {
+	if v.CheckServer {
+		copy := v
+		copy.CheckServer = false
+		sum := sha256.Sum256([]byte(fingerprint(copy) + "/" + config.ServerPolicyDigest(true, v.AllowPrivate, v.ServerAllowCIDRs)))
+		return hex.EncodeToString(sum[:])
+	}
 	if v.EgressID != "" {
 		sum := sha256.Sum256(append([]byte(v.Fingerprint+"/"+v.EgressID+"/"), v.Outbound...))
 		return hex.EncodeToString(sum[:])
@@ -139,13 +153,16 @@ func (r *Runtime) Restrict(c config.Config) {
 	r.mu.Unlock()
 }
 func (r *Runtime) permitted(policy string, v config.Route) bool {
+	if r.allowed == nil && !v.ValidUntil.IsZero() && !time.Now().Before(v.ValidUntil) {
+		return false
+	}
 	if r.liveGuard != nil {
 		permit, ok := r.liveGuard.Routes[v.Profile()]
-		expected := fingerprint(v)
-		if v.EgressID != "" {
-			expected = v.Fingerprint
+		expected := baseFingerprint(v)
+		if permit.ServerPolicyDigest != "" && permit.ServerPolicyDigest != config.ServerPolicyDigest(v.CheckServer, v.AllowPrivate, v.ServerAllowCIDRs) {
+			return false
 		}
-		if !ok || permit.Fingerprint != expected || !time.Now().Before(permit.ValidUntil) {
+		if !ok || !permit.Permits(expected, time.Now(), true) {
 			return false
 		}
 	}
@@ -156,18 +173,25 @@ func (r *Runtime) permitted(policy string, v config.Route) bool {
 		return true
 	}
 	if policy != "" {
-		return r.allowed[policy][v.ID] == fingerprint(v)
+		return r.allowed[policy][v.ID] == fingerprint(v) || r.overlapAllowedLocked(policy, v)
 	}
 	for _, m := range r.allowed {
 		if m[v.ID] == fingerprint(v) {
 			return true
 		}
 	}
+	if r.overlapAllowedLocked("", v) {
+		return true
+	}
 	return false
 }
 func (r *Runtime) RenewLease(t time.Time) { r.lease.Store(t.Unix()) }
 func routeIdentity(c config.Route, version string) string {
-	sum := sha256.Sum256(append([]byte(c.Core+"/"+version+"/"), c.Outbound...))
+	identity := c.Core + "/" + version + "/"
+	if c.CheckServer {
+		identity += config.ServerPolicyDigest(true, c.AllowPrivate, c.ServerAllowCIDRs) + "/"
+	}
+	sum := sha256.Sum256(append([]byte(identity), c.Outbound...))
 	return c.ID + "-" + hex.EncodeToString(sum[:8])
 }
 func (r *Runtime) ensure(ctx context.Context, c config.Config, route config.Route) (*engineEntry, error) {
@@ -181,7 +205,15 @@ func (r *Runtime) ensure(ctx context.Context, c config.Config, route config.Rout
 	if c.Managed && len(binary.SHA256) != 64 {
 		return nil, fmt.Errorf("artifact_binary_digest_missing")
 	}
+	checked, dialIP, err := checkedServer(ctx, route)
+	if err != nil {
+		return nil, err
+	}
 	key := routeIdentity(route, binary.Version+"/"+binary.SHA256)
+	if dialIP != "" {
+		sum := sha256.Sum256([]byte(dialIP))
+		key += "-" + hex.EncodeToString(sum[:4])
+	}
 	r.mu.Lock()
 	if r.staging == nil {
 		r.staging = map[string]probePermit{}
@@ -196,6 +228,22 @@ func (r *Runtime) ensure(ctx context.Context, c config.Config, route config.Rout
 		r.mu.Unlock()
 		return nil, fmt.Errorf("engine_budget_exhausted")
 	}
+	staged := 0
+	for _, e := range r.entries {
+		if e.staged {
+			staged++
+		}
+	}
+	for _, plan := range r.rollovers {
+		if plan.state == "warming" || plan.state == "canary" {
+			staged++
+		}
+	}
+	if staged >= 2 {
+		delete(r.staging, key)
+		r.mu.Unlock()
+		return nil, fmt.Errorf("staging_budget_exhausted")
+	}
 	slot := 0
 	for i := 0; i < processLimit; i++ {
 		if !r.slots[i] {
@@ -205,10 +253,19 @@ func (r *Runtime) ensure(ctx context.Context, c config.Config, route config.Rout
 	}
 	r.slots[slot] = true
 	r.mu.Unlock()
+	if err := engineHeadroom(); err != nil {
+		r.mu.Lock()
+		delete(r.slots, slot)
+		delete(r.staging, key)
+		r.mu.Unlock()
+		return nil, err
+	}
 	route.Endpoint = net.JoinHostPort("127.0.0.1", fmt.Sprint(41000+slot))
 	cfg := c
 	cfg.Cores = []config.Core{binary}
 	cfg.Routes = []config.Route{route}
+	checked.Endpoint = route.Endpoint
+	cfg.Routes[0] = checked
 	cfg.StateDir = filepath.Join(r.rootDir, key)
 	cfg.ProbeIntervalSeconds = 30
 	probeSettings := routeProbeConfig(c, route.ID)
@@ -232,7 +289,7 @@ func (r *Runtime) ensure(ctx context.Context, c config.Config, route config.Rout
 		r.mu.Unlock()
 		return nil, fmt.Errorf("engine_configuration_rejected")
 	}
-	e := &engineEntry{route: &Route{Config: route, Instance: manager.Instances[binary.ID]}, manager: manager, cancel: cancel, key: key, started: time.Now(), used: time.Now(), slot: slot}
+	e := &engineEntry{staged: true, dialIP: dialIP, route: &Route{Config: route, Instance: manager.Instances[binary.ID]}, manager: manager, cancel: cancel, key: key, started: time.Now(), used: time.Now(), slot: slot}
 	e.route.CeilingBPS = int64(c.DownloadMbps) * 125000
 	if path, ok := c.Egress(route.EgressID); ok {
 		e.route.CeilingBPS = int64(path.DownloadMbps) * 125000
@@ -261,6 +318,8 @@ func (r *Runtime) probeAllowed(key string, route config.Route) bool {
 		until = pending.until
 	} else if active := r.current[route.ID]; active != nil && active.key == key {
 		until = r.valid[route.ID]
+	} else if plan := r.rollovers[route.ID]; plan != nil && plan.old.Config.Fingerprint == route.Fingerprint && r.overlapAllowedLocked("", route) {
+		until = r.overlapDeadlineLocked(route)
 	} else {
 		return false
 	}
@@ -288,16 +347,24 @@ func (r *Runtime) Apply(ctx context.Context, c config.Config, g *Gateway) error 
 			continue
 		}
 		healthy := false
+		admissible := false
+		resourceDeferred, rotation := false, false
 		for _, id := range p.Routes {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			v := routes[id]
+			rotation = rotation || len(v.Previous) > 0
+			if v.EstablishedOnly {
+				continue
+			}
+			admissible = true
 			if !v.ValidUntil.IsZero() && time.Now().After(v.ValidUntil) {
 				continue
 			}
 			e, err := r.ensure(ctx, c, v)
 			if err != nil {
+				resourceDeferred = resourceDeferred || strings.HasPrefix(err.Error(), "staging_") || strings.HasPrefix(err.Error(), "engine_")
 				continue
 			}
 			prepared[id] = e
@@ -317,7 +384,37 @@ func (r *Runtime) Apply(ctx context.Context, c config.Config, g *Gateway) error 
 			delete(prepared, id)
 			r.discardStaged(e)
 		}
-		if !healthy {
+		if !healthy && admissible {
+			// A bounded staging budget must not make independent policies
+			// lose their authorized LKG path. Replace them lazily in maintain.
+			for _, id := range p.Routes {
+				r.mu.RLock()
+				old := r.current[id]
+				allowed := old != nil && r.permitted(p.ID, old.route.Config)
+				r.mu.RUnlock()
+				if !allowed || !old.route.Instance.Ready.Load() {
+					continue
+				}
+				check := config.Config{ProbeURL: p.ProbeURL, ProbeFallbackURLs: p.ProbeFallbackURLs, ConnectTimeoutMS: p.ConnectTimeoutMS}
+				if check.ProbeURL == "" {
+					check.ProbeURL = c.ProbeURL
+					check.ProbeFallbackURLs = c.ProbeFallbackURLs
+				}
+				if check.ConnectTimeoutMS == 0 {
+					check.ConnectTimeoutMS = c.ConnectTimeoutMS
+				}
+				if !old.route.Instance.CheckRoute(ctx, old.route.Config.Endpoint, check) {
+					continue
+				}
+				prepared[id] = old
+				healthy = true
+				break
+			}
+		}
+		if !healthy && admissible {
+			if rotation && resourceDeferred && len(prepared) > 0 {
+				continue
+			}
 			return fmt.Errorf("policy_has_no_healthy_path")
 		}
 	}
@@ -327,6 +424,7 @@ func (r *Runtime) Apply(ctx context.Context, c config.Config, g *Gateway) error 
 	if err := g.Reconfigure(c); err != nil {
 		return err
 	}
+	recovered := r.restoreRolloverEngines(ctx, c)
 	valid := map[string]time.Time{}
 	policies := map[string]*policyState{}
 	versions := map[string]string{}
@@ -335,14 +433,38 @@ func (r *Runtime) Apply(ctx context.Context, c config.Config, g *Gateway) error 
 	}
 	r.mu.RLock()
 	existing := make(map[string]*engineEntry, len(r.entries))
+	existingCurrent := make(map[string]*engineEntry, len(r.current))
+	for id, e := range r.current {
+		existingCurrent[id] = e
+	}
 	for k, e := range r.entries {
 		existing[k] = e
 	}
 	r.mu.RUnlock()
 	for _, v := range c.Routes {
 		valid[v.ID] = v.ValidUntil
-		if e := existing[routeIdentity(v, versions[v.Core])]; e != nil {
+		if prepared[v.ID] != nil {
+			continue
+		}
+		base := routeIdentity(v, versions[v.Core])
+		if e := existingCurrent[v.ID]; e != nil && (e.key == base || strings.HasPrefix(e.key, base+"-")) {
 			prepared[v.ID] = e
+			continue
+		}
+		if e := existingCurrent[v.ID]; e != nil {
+			r.mu.RLock()
+			overlap := r.overlapAllowedLocked("", e.route.Config)
+			r.mu.RUnlock()
+			if overlap {
+				prepared[v.ID] = e
+				continue
+			}
+		}
+		for key, e := range existing {
+			if key == base || (v.CheckServer && strings.HasPrefix(key, base+"-")) {
+				prepared[v.ID] = e
+				break
+			}
 		}
 	}
 	for _, p := range c.Policies {
@@ -354,8 +476,12 @@ func (r *Runtime) Apply(ctx context.Context, c config.Config, g *Gateway) error 
 	}
 	r.mu.Lock()
 	r.config = c
+	previousCurrent := r.current
 	r.current = prepared
+	r.installRolloversLocked(previousCurrent, time.Now())
+	r.installRecoveredRolloversLocked(recovered)
 	for id, e := range prepared {
+		e.staged = false
 		if validated[id] {
 			e.route.Instance.ConfigureValidatedProbe(probes[id])
 		} else {
@@ -395,7 +521,7 @@ func (r *Runtime) Apply(ctx context.Context, c config.Config, g *Gateway) error 
 // and sessions are retained.
 func (r *Runtime) discardStaged(e *engineEntry) {
 	r.mu.Lock()
-	if r.current[e.route.Config.ID] == e || e.route.Active.Load() > 0 {
+	if r.current[e.route.Config.ID] == e || e.route.Active.Load() > 0 || e.route.References.Load() > 0 {
 		r.mu.Unlock()
 		return
 	}
@@ -459,11 +585,23 @@ func newPolicyState(p config.Policy) *policyState {
 }
 func (r *Runtime) rebuildLocked() {
 	now := time.Now()
+	r.advanceRolloversLocked(now)
 	for _, p := range r.policies {
 		candidates := []*Route{}
 		p.topologyFactors = map[string]string{}
 		p.topologyPrepared = now
 		for id, e := range r.current {
+			if r.establishedOnlyLocked(e.route.Config) {
+				continue
+			}
+			if p := r.rollovers[id]; p != nil && (p.state == "warming" || p.state == "paused" || p.state == "rolled_back" || !e.route.Instance.Ready.Load()) {
+				for _, old := range r.entries {
+					if old.route == p.old && r.permitted("", old.route.Config) {
+						e = old
+						break
+					}
+				}
+			}
 			if _, ok := p.rank[id]; !ok {
 				continue
 			}
@@ -603,6 +741,9 @@ func (r *Runtime) candidatesObserved(key string, decision *topology.Decision) (r
 	}
 	if decision != nil {
 		decision.Mode = mode
+	}
+	if p != nil && (mode == "auto" || mode == "throughput") {
+		return r.selectAutomaticLocked(p, out, decision)
 	}
 	if p != nil && len(r.config.EgressPaths) > 0 && (mode == "auto" || mode == "throughput" || mode == "round-robin") {
 		return r.selectEgressLocked(p, out, decision)
@@ -826,6 +967,7 @@ func (r *Runtime) background() {
 			return
 		case <-t.C:
 			r.refreshEndpointIPs(r.ctx)
+			r.refreshServerPins(r.ctx)
 			r.refreshTargetHealth(r.ctx)
 			r.maintain()
 		}
@@ -849,8 +991,17 @@ func (r *Runtime) maintain() {
 		}
 	}
 	var retire []*engineEntry
+	for _, p := range r.rollovers {
+		if !r.establishedOnlyLocked(p.next.Config) && (p.state != "active_draining" || (p.next.Config.UDP && !udpProven(p.next))) && r.overlapAllowedLocked("", p.old.Config) {
+			for key, e := range r.entries {
+				if e.route == p.old || e.route == p.next {
+					keep[key] = true
+				}
+			}
+		}
+	}
 	for k, e := range r.entries {
-		if !keep[k] && e.route.Active.Load() == 0 && time.Since(e.used) > 30*time.Second {
+		if !keep[k] && e.route.Active.Load() == 0 && e.route.References.Load() == 0 && time.Since(e.used) > 30*time.Second {
 			r.retiredUp.Add(e.route.BytesUp.Load())
 			r.retiredDown.Add(e.route.BytesDown.Load())
 			delete(r.entries, k)
@@ -880,24 +1031,41 @@ func (r *Runtime) maintain() {
 	r.mu.RLock()
 	count := len(r.current)
 	r.mu.RUnlock()
-	if count >= hotLimit+2 {
-		return
-	}
 	for range cfg.Routes {
 		r.coldCursor = (r.coldCursor + 1) % len(cfg.Routes)
 		v := cfg.Routes[r.coldCursor]
 		r.mu.RLock()
 		e := r.current[v.ID]
 		r.mu.RUnlock()
-		if e != nil || time.Since(r.visited[v.ID]) < 5*time.Minute || (!v.ValidUntil.IsZero() && time.Now().After(v.ValidUntil)) {
+		if e != nil && fingerprint(e.route.Config) == fingerprint(v) {
+			continue
+		}
+		if e == nil && count >= hotLimit+2 {
+			continue
+		}
+		delay := 5 * time.Minute
+		if e != nil {
+			delay = 30 * time.Second
+		}
+		if v.EstablishedOnly || time.Since(r.visited[v.ID]) < delay || (!v.ValidUntil.IsZero() && time.Now().After(v.ValidUntil)) {
 			continue
 		}
 		r.visited[v.ID] = time.Now()
 		entry, err := r.ensure(r.ctx, cfg, v)
 		if err == nil {
 			r.mu.Lock()
+			entry.staged = false
 			r.current[v.ID] = entry
+			if e != nil {
+				r.installRolloversLocked(map[string]*engineEntry{v.ID: e}, time.Now())
+			}
 			r.mu.Unlock()
+			if len(r.restoreRollovers) > 0 {
+				recovered := r.restoreRolloverEngines(r.ctx, cfg)
+				r.mu.Lock()
+				r.installRecoveredRolloversLocked(recovered)
+				r.mu.Unlock()
+			}
 		}
 		return
 	}

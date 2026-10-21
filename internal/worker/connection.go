@@ -20,6 +20,7 @@ const (
 // Embedding TCPConn retains its ReadFrom/WriteTo methods and Linux splice path.
 // Only socket lifetime is intercepted; payload bytes do not pass through a Go wrapper.
 type routeConn struct {
+	ticket *routeTicket
 	*net.TCPConn
 	route              *Route
 	once               sync.Once
@@ -67,6 +68,11 @@ func (c *routeConn) Close() error {
 		delete(c.gateway.sockets, c)
 		c.gateway.socketMu.Unlock()
 		c.route.Active.Add(-1)
+		c.mu.Lock()
+		delivered := c.down > c.initialDown
+		c.mu.Unlock()
+		c.ticket.outcome(delivered)
+		c.ticket.release()
 		if c.release != nil {
 			c.release()
 		}
@@ -134,6 +140,11 @@ func (c *routeConn) sample() {
 	}
 }
 func (g *Gateway) sampleSockets() {
+	type observation struct {
+		up, down int64
+		at       time.Time
+	}
+	observed := map[*Route]observation{}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -148,7 +159,42 @@ func (g *Gateway) sampleSockets() {
 			}
 			g.socketMu.Unlock()
 			for _, c := range list {
+				if c.ticket != nil && !c.ticket.allowed() {
+					c.Close()
+					continue
+				}
 				c.sample()
+			}
+			routes := []*Route{}
+			if g.Dynamic != nil {
+				g.Dynamic.mu.RLock()
+				for _, e := range g.Dynamic.entries {
+					routes = append(routes, e.route)
+				}
+				g.Dynamic.mu.RUnlock()
+			} else {
+				routes = g.Routes
+			}
+			keep := map[*Route]bool{}
+			now := time.Now()
+			for _, v := range routes {
+				up, down := v.BytesUp.Load(), v.BytesDown.Load()
+				previous, ok := observed[v]
+				if ok {
+					seconds := now.Sub(previous.at).Seconds()
+					if seconds > 0 {
+						v.TrafficUpBPS.Store(int64(float64(max(int64(0), up-previous.up)) / seconds))
+						v.TrafficDownBPS.Store(int64(float64(max(int64(0), down-previous.down)) / seconds))
+						v.TrafficAt.Store(now.Unix())
+					}
+				}
+				observed[v] = observation{up, down, now}
+				keep[v] = true
+			}
+			for v := range observed {
+				if !keep[v] {
+					delete(observed, v)
+				}
 			}
 		}
 	}

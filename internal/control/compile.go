@@ -31,6 +31,9 @@ func (s *Server) poolProfiles(ctx context.Context, id string) ([]store.Object, e
 	return s.poolProfilesFrom(ctx, id, nil)
 }
 func (s *Server) poolProfilesFrom(ctx context.Context, id string, blueprint map[string][]store.Object) ([]store.Object, error) {
+	return s.poolProfilesFromWithRetired(ctx, id, blueprint, false)
+}
+func (s *Server) poolProfilesFromWithRetired(ctx context.Context, id string, blueprint map[string][]store.Object, includeRetired bool) ([]store.Object, error) {
 	get := func(kind, id string) (store.Object, error) {
 		if blueprint != nil && (kind == "pools" || kind == "aggregates") {
 			for _, o := range blueprint[kind] {
@@ -82,6 +85,10 @@ func (s *Server) poolProfilesFrom(ctx context.Context, id string, blueprint map[
 		}
 	}
 	for _, o := range sources {
+		if pool.Automatic {
+			sourceIDs = append(sourceIDs, o.ID)
+			order[o.ID] = len(order) + 1
+		}
 		v, e := catalog.Decode[catalog.Source](o.Data)
 		if e == nil {
 			sourceMap[o.ID] = v
@@ -126,10 +133,13 @@ func (s *Server) poolProfilesFrom(ctx context.Context, id string, blueprint map[
 	})
 	for _, o := range items {
 		p, exists := decoded[o.ID]
-		if !exists || !p.Present || !p.Enabled || !p.Supported {
+		if !exists || (!p.Present && (!includeRetired || !time.Now().Before(p.RetiredUntil))) || !p.Enabled || !p.Supported {
 			continue
 		}
 		source, exists := sourceMap[p.SourceID]
+		if !p.FrozenUntil.IsZero() && !time.Now().Before(p.FrozenUntil) {
+			continue
+		}
 		if !exists || !source.Enabled || source.LastSuccess.IsZero() || time.Now().After(source.LastSuccess.Add(time.Duration(source.MaxStaleSeconds)*time.Second)) {
 			continue
 		}
@@ -151,10 +161,12 @@ func (s *Server) poolProfilesFrom(ctx context.Context, id string, blueprint map[
 		if expiry := source.Quota["expire"]; expiry > 0 && time.Now().Unix() >= expiry {
 			continue
 		}
-		if dedupe && seen[p.Fingerprint] {
+		if dedupe && p.Present && seen[p.Fingerprint] {
 			continue
 		}
-		seen[p.Fingerprint] = true
+		if p.Present {
+			seen[p.Fingerprint] = true
+		}
 		if prefix {
 			o.Name = sourceNames[p.SourceID] + " / " + o.Name
 		}
@@ -231,9 +243,15 @@ func (s *Server) compile(ctx context.Context, generation int64, blueprint map[st
 		if e != nil {
 			return Revision{}, e
 		}
+		if (policy.Mode == "auto" || policy.Mode == "throughput") && policy.SpeedURL == "" && !policy.DisableSpeedProbes {
+			policy.SpeedURL = catalog.DefaultSpeedURL
+		}
+		if policy.DisableSpeedProbes {
+			policy.SpeedURL = ""
+		}
 		profiles, cached := poolCache[policy.PoolID]
 		if !cached {
-			profiles, e = s.poolProfilesFrom(ctx, policy.PoolID, blueprint)
+			profiles, e = s.poolProfilesFromWithRetired(ctx, policy.PoolID, blueprint, true)
 			if e != nil {
 				return Revision{}, e
 			}
@@ -280,12 +298,20 @@ func (s *Server) compile(ctx context.Context, generation int64, blueprint map[st
 				c.Cores = append(c.Cores, config.Core{Family: "xray", ID: coreID, Version: actual, Artifact: version, Binary: binary})
 				coreSeen[coreID] = true
 			}
-			until := source.LastSuccess.Add(time.Duration(source.MaxStaleSeconds) * time.Second)
+			until := catalog.ProfileUntil(source, p)
+			if !p.Present && p.RetiredUntil.Before(until) {
+				until = p.RetiredUntil
+			}
 			if expiry := source.Quota["expire"]; expiry > 0 && time.Unix(expiry, 0).Before(until) {
 				until = time.Unix(expiry, 0)
 			}
 			c.Routes = append(c.Routes, config.Route{ID: profileObject.ID, Core: coreID, Endpoint: net.JoinHostPort("127.0.0.1", strconv.Itoa(45000+len(c.Routes))), Outbound: p.Outbound, ValidUntil: until, CapacityGroup: p.SourceID + "/" + p.Host, ServerHost: p.Host, UDP: p.UDP})
 			c.Routes[len(c.Routes)-1].Fingerprint = p.Fingerprint
+			c.Routes[len(c.Routes)-1].EstablishedOnly = !p.Present
+			c.Routes[len(c.Routes)-1].Previous = append([]config.RevisionPermit(nil), p.Previous...)
+			c.Routes[len(c.Routes)-1].CheckServer = true
+			c.Routes[len(c.Routes)-1].AllowPrivate = len(source.ProxyAllowCIDRs) > 0
+			c.Routes[len(c.Routes)-1].ServerAllowCIDRs = append([]string(nil), source.ProxyAllowCIDRs...)
 			routeSeen[profileObject.ID] = true
 		}
 		if !policySeen[po.ID] {

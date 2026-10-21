@@ -30,13 +30,15 @@ type Operation struct {
 	LeaseUntil time.Time       `json:"lease_until,omitempty"`
 }
 type sourceSnapshot struct {
-	SourceID     string           `json:"source_id"`
-	Fetched      time.Time        `json:"fetched_at"`
-	Body         []byte           `json:"body"`
-	Parsed       catalog.Parsed   `json:"parsed"`
-	ETag         string           `json:"etag"`
-	LastModified string           `json:"last_modified"`
-	Quota        map[string]int64 `json:"quota"`
+	HeldFingerprints []string         `json:"held_fingerprints,omitempty"`
+	ReviewSnapshot   string           `json:"review_snapshot,omitempty"`
+	SourceID         string           `json:"source_id"`
+	Fetched          time.Time        `json:"fetched_at"`
+	Body             []byte           `json:"body"`
+	Parsed           catalog.Parsed   `json:"parsed"`
+	ETag             string           `json:"etag"`
+	LastModified     string           `json:"last_modified"`
+	Quota            map[string]int64 `json:"quota"`
 }
 
 func (s *Server) enqueue(ctx context.Context, action, target string, payload json.RawMessage, key string) (store.Object, error) {
@@ -118,7 +120,7 @@ func (s *Server) execute(o store.Object, v Operation) {
 	result, err = runOperation(func() (any, error) {
 		switch v.Action {
 		case "refresh", "test", "approve":
-			result, err = s.refresh(ctx, v.Target, v.Action)
+			result, err = s.refreshExpected(ctx, v.Target, v.Action, v.Payload)
 		case "apply", "rollback", "reconcile":
 			result, err = s.apply(ctx, v)
 		case "install-core":
@@ -173,6 +175,9 @@ func safeError(e error) string {
 	return "operation_failed"
 }
 func (s *Server) refresh(ctx context.Context, id, action string) (any, error) {
+	return s.refreshExpected(ctx, id, action, nil)
+}
+func (s *Server) refreshExpected(ctx context.Context, id, action string, expected json.RawMessage) (any, error) {
 	// Serialize refreshes of a source using a DB-backed lock shared by API replicas.
 	conn, e := s.Store.DB.Acquire(ctx)
 	if e != nil {
@@ -203,6 +208,15 @@ func (s *Server) refresh(ctx context.Context, id, action string) (any, error) {
 	if e != nil {
 		return nil, e
 	}
+	if action == "approve" && len(expected) > 0 {
+		var body struct {
+			Pending string `json:"pending_snapshot"`
+			Version int64  `json:"source_version"`
+		}
+		if json.Unmarshal(expected, &body) != nil || body.Version != o.Version || body.Pending != source.PendingSnapshot {
+			return nil, errCode("review_snapshot_changed")
+		}
+	}
 	var snap sourceSnapshot
 	if action == "approve" {
 		if source.PendingSnapshot == "" {
@@ -216,11 +230,7 @@ func (s *Server) refresh(ctx context.Context, id, action string) (any, error) {
 			return nil, e
 		}
 	} else {
-		fetchSource := source
-		if action == "test" {
-			fetchSource.ETag = ""
-			fetchSource.LastModified = ""
-		}
+		fetchSource := sourceForRefresh(source, action)
 		fetched, e := catalog.Fetch(ctx, fetchSource)
 		if e != nil {
 			if action != "test" {
@@ -232,20 +242,10 @@ func (s *Server) refresh(ctx context.Context, id, action string) (any, error) {
 			return nil, e
 		}
 		if fetched.NotModified {
-			pending := source.PendingSnapshot
-			source.PendingSnapshot = ""
-			if len(fetched.Quota) > 0 {
-				source.Quota = fetched.Quota
-			}
-			source.LastSuccess = time.Now().UTC()
-			source.LastError = ""
-			source.NextRefresh = time.Now().Add(time.Duration(max(source.IntervalSeconds, 60)) * time.Second)
+			source = sourceNotModified(source, fetched.Quota, time.Now().UTC())
 			o.Data, _ = json.Marshal(source)
 			if _, e = s.Store.Put(ctx, o, o.Version); e != nil {
 				return nil, e
-			}
-			if pending != "" {
-				s.deleteSnapshot(ctx, pending)
 			}
 			s.queueReconcile(ctx, id)
 			return map[string]any{"not_modified": true}, nil
@@ -271,6 +271,17 @@ func (s *Server) refresh(ctx context.Context, id, action string) (any, error) {
 		return nil, e
 	}
 	preview["diff"] = diff
+	if snap.Parsed.InvalidEntries > 0 {
+		diff["requires_review"] = true
+		diff["reason"] = "incomplete_subscription"
+	}
+	if source.UpdatePolicy == "review_only" && diff["address_rotations"].(int) > 0 {
+		diff["requires_review"] = true
+	}
+	if !strings.HasPrefix(strings.ToLower(source.URL), "https://") && diff["address_rotations"].(int) > 0 {
+		diff["requires_review"] = true
+		diff["reason"] = "untrusted_source_transport"
+	}
 	if action == "test" {
 		return preview, nil
 	}
@@ -283,6 +294,87 @@ func (s *Server) refresh(ctx context.Context, id, action string) (any, error) {
 		previousPending := source.PendingSnapshot
 		source.PendingSnapshot = pending.ID
 		source.LastError = "review_required"
+		source.LastFetched = snap.Fetched
+		if diff["filter_membership_changed"] == true {
+			source.LastError = "endpoint_filter_membership_changed"
+		}
+		// Healthy independent changes continue while risky groups stay held.
+		if source.UpdatePolicy != "review_only" && strings.HasPrefix(strings.ToLower(source.URL), "https://") {
+			items, _, err := s.Store.List(ctx, "profiles", 20000, 0)
+			if err != nil {
+				return nil, err
+			}
+			previous := []catalog.Profile{}
+			protected := map[string]bool{}
+			heldIDs := map[string]bool{}
+			if ids, ok := diff["filter_held_ids"].([]string); ok {
+				for _, id := range ids {
+					heldIDs[id] = true
+				}
+			}
+			blockedOld := map[string]bool{}
+			pools, _, err := s.Store.List(ctx, "pools", 100, 0)
+			if err != nil {
+				return nil, err
+			}
+			pins := map[string]bool{}
+			for _, id := range source.Filter.ExcludedIDs {
+				pins[id] = true
+			}
+			for _, poolObject := range pools {
+				pool, _ := catalog.Decode[catalog.Pool](poolObject.Data)
+				for _, id := range append(pool.ProfileIDs, pool.Filter.ExcludedIDs...) {
+					pins[id] = true
+				}
+			}
+			for _, item := range items {
+				p, _ := catalog.Decode[catalog.Profile](item.Data)
+				if p.SourceID == id {
+					previous = append(previous, p)
+					if heldIDs[item.ID] {
+						blockedOld[p.Fingerprint] = true
+					}
+					if pins[item.ID] {
+						protected[p.Fingerprint] = true
+					}
+				}
+			}
+			blockedNext := map[string]bool{}
+			for nextFP, oldFP := range catalog.AddressMatchesProtected(previous, snap.Parsed.Profiles, protected) {
+				if blockedOld[oldFP] {
+					blockedNext[nextFP] = true
+				}
+			}
+			merged, held, changed := safePartialHeld(previous, snap.Parsed.Profiles, protected, blockedNext)
+			confirmed := false
+			known := map[string]bool{}
+			for _, p := range previous {
+				if p.Present {
+					known[p.Fingerprint] = true
+				}
+			}
+			for _, p := range snap.Parsed.Profiles {
+				if known[p.Fingerprint] && !blockedNext[p.Fingerprint] {
+					confirmed = true
+				}
+			}
+			if changed || confirmed {
+				partial := snap
+				partial.Parsed.Profiles = merged
+				partial.HeldFingerprints = held
+				partial.ReviewSnapshot = pending.ID
+				if err = s.commitSnapshot(ctx, o, source, partial); err != nil {
+					s.deleteSnapshot(ctx, pending.ID)
+					return nil, err
+				}
+				if previousPending != "" {
+					s.deleteSnapshot(ctx, previousPending)
+				}
+				s.queueReconcile(ctx, id)
+				s.notify()
+				return map[string]any{"partially_updated": true, "requires_review": true, "held": len(held), "diff": diff}, nil
+			}
+		}
 		source.NextRefresh = time.Now().Add(time.Hour)
 		o.Data, _ = json.Marshal(source)
 		if _, e = s.Store.Put(ctx, o, o.Version); e != nil {
@@ -295,7 +387,21 @@ func (s *Server) refresh(ctx context.Context, id, action string) (any, error) {
 		return map[string]any{"requires_review": true, "previous_count": source.ProfileCount, "new_count": len(snap.Parsed.Profiles), "preview": preview, "diff": diff}, nil
 	}
 	if e = s.commitSnapshot(ctx, o, source, snap); e != nil {
+		if e.Error() == "rotation_waiting_drain" {
+			source.LastError = "rotation_waiting_drain"
+			source.LastFetched = snap.Fetched
+			source.NextRefresh = time.Now().Add(time.Minute)
+			o.Data, _ = json.Marshal(source)
+			s.Store.Put(ctx, o, o.Version)
+		}
 		return nil, e
+	}
+	if bootstrap, err := s.ensureAutomaticDefaults(ctx); err != nil {
+		return nil, err
+	} else if bootstrap {
+		if _, err = s.enqueue(ctx, "apply", "", nil, fmt.Sprintf("automatic-initial-%s-%d", id, o.Version)); err != nil {
+			return nil, err
+		}
 	}
 	s.queueReconcile(ctx, id)
 	s.notify()
@@ -349,6 +455,7 @@ func (s *Server) commitSnapshot(ctx context.Context, sourceObject store.Object, 
 	byIdentity := map[string][]store.Object{}
 	byFingerprint := map[string]store.Object{}
 	byEndpoint := map[string][]store.Object{}
+	oldProfiles := []catalog.Profile{}
 	oldSource := []store.Object{}
 	for _, o := range previous {
 		p, e := catalog.Decode[catalog.Profile](o.Data)
@@ -356,6 +463,7 @@ func (s *Server) commitSnapshot(ctx context.Context, sourceObject store.Object, 
 			continue
 		}
 		oldSource = append(oldSource, o)
+		oldProfiles = append(oldProfiles, p)
 		byIdentity[p.Identity] = append(byIdentity[p.Identity], o)
 		byFingerprint[p.Fingerprint] = o
 		byEndpoint[endpointIdentity(p)] = append(byEndpoint[endpointIdentity(p)], o)
@@ -380,18 +488,29 @@ func (s *Server) commitSnapshot(ctx context.Context, sourceObject store.Object, 
 	}
 	for _, o := range pools {
 		p, _ := catalog.Decode[catalog.Pool](o.Data)
-		for _, id := range p.Filter.ExcludedIDs {
+		for _, id := range append(p.Filter.ExcludedIDs, p.ProfileIDs...) {
 			protected[id] = true
 		}
 	}
 	protectedIdentity := map[string]bool{}
 	protectedEndpoint := map[string]bool{}
+	protectedFP := map[string]bool{}
+	protectedTemplates := map[string]bool{}
 	for _, o := range oldSource {
 		prev, _ := catalog.Decode[catalog.Profile](o.Data)
 		if !prev.Enabled || prev.CoreOverride || protected[o.ID] {
+			protectedFP[prev.Fingerprint] = true
+			if template := catalog.AddressTemplate(prev); template != "" {
+				protectedTemplates[template] = true
+			}
 			protectedIdentity[prev.Identity] = true
 			protectedEndpoint[endpointIdentity(prev)] = true
 		}
+	}
+	rotations := catalog.AddressMatchesProtected(oldProfiles, snap.Parsed.Profiles, protectedFP)
+	revisionRefs, canPrune, e := s.revisionReferences(ctx)
+	if e != nil {
+		return e
 	}
 	keep := map[string]bool{}
 	unique := map[string]bool{}
@@ -406,6 +525,9 @@ func (s *Server) commitSnapshot(ctx context.Context, sourceObject store.Object, 
 		p.Enabled = true
 		p.CoreVersion = source.CoreVersion
 		old, exists := byFingerprint[p.Fingerprint]
+		if !exists && rotations[p.Fingerprint] != "" {
+			old, exists = byFingerprint[rotations[p.Fingerprint]]
+		}
 		if !exists && len(byIdentity[p.Identity]) == 1 && frequency[p.Identity] == 1 {
 			old = byIdentity[p.Identity][0]
 			exists = true
@@ -420,12 +542,31 @@ func (s *Server) commitSnapshot(ctx context.Context, sourceObject store.Object, 
 			id = old.ID
 			version = old.Version + 1
 			prev, _ := catalog.Decode[catalog.Profile](old.Data)
+			for _, held := range snap.HeldFingerprints {
+				if held == p.Fingerprint {
+					p.FrozenUntil = catalog.ProfileUntil(source, prev)
+					break
+				}
+			}
+			if prev.Fingerprint == p.Fingerprint {
+				p.Previous = prev.Previous
+			} else if rotations[p.Fingerprint] == prev.Fingerprint {
+				for _, permit := range prev.Previous {
+					if time.Now().Before(permit.ValidUntil) && (!canPrune || revisionRefs[permit.Fingerprint]) {
+						p.Previous = append(p.Previous, permit)
+					}
+				}
+				if len(p.Previous) >= 2 {
+					return errCode("rotation_waiting_drain")
+				}
+				p.Previous = append(p.Previous, catalog.RevisionPermit{Fingerprint: prev.Fingerprint, ValidUntil: catalog.ProfileUntil(source, prev)})
+			}
 			p.Enabled = prev.Enabled
 			if prev.CoreOverride {
 				p.CoreVersion = prev.CoreVersion
 				p.CoreOverride = true
 			}
-		} else if protectedIdentity[p.Identity] || protectedEndpoint[endpointIdentity(p)] {
+		} else if protectedIdentity[p.Identity] || protectedEndpoint[endpointIdentity(p)] || protectedTemplates[catalog.AddressTemplate(p)] {
 			p.Enabled = false
 			p.Warnings = append(p.Warnings, "ambiguous_identity_manual_override_held")
 		}
@@ -443,6 +584,7 @@ func (s *Server) commitSnapshot(ctx context.Context, sourceObject store.Object, 
 				continue
 			}
 			p.Present = false
+			p.RetiredUntil = catalog.ProfileUntil(source, p)
 			old.Data, _ = json.Marshal(p)
 			old.Version++
 			newObjects = append(newObjects, old)
@@ -465,9 +607,14 @@ func (s *Server) commitSnapshot(ctx context.Context, sourceObject store.Object, 
 		return store.ErrLimit
 	}
 	source.LastSuccess = snap.Fetched
+	source.LastFetched = snap.Fetched
 	source.NextRefresh = time.Now().Add(time.Duration(max(source.IntervalSeconds, 60)) * time.Second)
 	source.LastError = ""
 	source.PendingSnapshot = ""
+	if snap.ReviewSnapshot != "" {
+		source.PendingSnapshot = snap.ReviewSnapshot
+		source.LastError = "partially_updated"
+	}
 	source.ETag = snap.ETag
 	source.LastModified = snap.LastModified
 	source.Quota = snap.Quota
@@ -528,7 +675,7 @@ func (s *Server) commitSnapshot(ctx context.Context, sourceObject store.Object, 
 	if e = tx.Commit(ctx); e != nil {
 		return e
 	}
-	if pendingID != "" {
+	if pendingID != "" && pendingID != snap.ReviewSnapshot {
 		s.deleteSnapshot(ctx, pendingID)
 	}
 	s.Store.Event(ctx, "sources", sourceObject.ID, "refreshed", map[string]any{"profiles": source.ProfileCount, "format": snap.Parsed.Format})

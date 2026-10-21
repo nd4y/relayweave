@@ -73,7 +73,7 @@ func (a *Agent) admissionLoop(ctx context.Context, fetch admissionFetch, interva
 	defer ticker.Stop()
 	for {
 		call, cancel := context.WithTimeout(ctx, 3*time.Second)
-		response, err := fetch(call, &wire.AdmissionRequest{WorkerID: a.workerID, SeenVersion: seen})
+		response, err := fetch(call, &wire.AdmissionRequest{RoutingVersion: 2, WorkerID: a.workerID, SeenVersion: seen})
 		cancel()
 		if err == nil && response != nil && response.LiveGuard != nil {
 			guard := response.LiveGuard

@@ -22,14 +22,15 @@ func (Codec) Unmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
 func init()                                   { encoding.RegisterCodec(Codec{}) }
 
 type Hello struct {
-	Topology     *topology.Frame `json:"topology,omitempty"`
-	WorkerID     string          `json:"worker_id"`
-	Generation   int64           `json:"generation"`
-	GuardVersion int64           `json:"guard_version,omitempty"`
-	Status       json.RawMessage `json:"status,omitempty"`
-	Error        string          `json:"error,omitempty"`
-	CSR          []byte          `json:"csr,omitempty"`
-	Results      []Result        `json:"results,omitempty"`
+	RoutingVersion int             `json:"routing_version,omitempty"`
+	Topology       *topology.Frame `json:"topology,omitempty"`
+	WorkerID       string          `json:"worker_id"`
+	Generation     int64           `json:"generation"`
+	GuardVersion   int64           `json:"guard_version,omitempty"`
+	Status         json.RawMessage `json:"status,omitempty"`
+	Error          string          `json:"error,omitempty"`
+	CSR            []byte          `json:"csr,omitempty"`
+	Results        []Result        `json:"results,omitempty"`
 }
 type Command struct {
 	WorkerID string          `json:"worker_id,omitempty"`
@@ -58,8 +59,9 @@ type Assignment struct {
 // SeenVersion is a receive cursor, never a durability acknowledgement.
 // Hello.GuardVersion continues to acknowledge only durable checkpoints.
 type AdmissionRequest struct {
-	WorkerID    string `json:"worker_id"`
-	SeenVersion int64  `json:"seen_version"`
+	RoutingVersion int    `json:"routing_version,omitempty"`
+	WorkerID       string `json:"worker_id"`
+	SeenVersion    int64  `json:"seen_version"`
 }
 type AdmissionResponse struct {
 	LiveGuard *config.LiveGuard `json:"live_guard,omitempty"`

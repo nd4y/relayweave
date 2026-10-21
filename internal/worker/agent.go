@@ -27,6 +27,7 @@ import (
 )
 
 type savedState struct {
+	Rollovers       []rolloverRecord       `json:"rollovers,omitempty"`
 	ProbeDay        time.Time              `json:"probe_day"`
 	ProbeBudget     map[string]int64       `json:"probe_budget"`
 	FenceGeneration int64                  `json:"fence_generation"`
@@ -40,6 +41,8 @@ type savedState struct {
 	Drained         bool                   `json:"drained"`
 }
 type Agent struct {
+	retryAt               atomic.Int64
+	failureAttempts       atomic.Int64
 	workerID              string
 	persisted             bool
 	persistedGeneration   int64
@@ -89,12 +92,13 @@ func AgentRun(ctx context.Context) error {
 	root := filepath.Join(dir, "runtime")
 	if entries, e := os.ReadDir(root); e == nil {
 		for _, v := range entries {
-			if v.IsDir() && regexp.MustCompile(`^[a-f0-9]{24}-[a-f0-9]{16}$`).MatchString(v.Name()) {
+			if v.IsDir() && regexp.MustCompile(`^[a-zA-Z0-9_-]{1,48}-[a-f0-9]{16}(?:-[a-f0-9]{8})?$`).MatchString(v.Name()) {
 				os.RemoveAll(filepath.Join(root, v.Name()))
 			}
 		}
 	}
 	r := NewRuntime(ctx, root)
+	r.restoreRollovers = a.state.Rollovers
 	if !a.state.ProbeDay.IsZero() {
 		r.mu.Lock()
 		r.probeWindow = a.state.ProbeDay
@@ -185,7 +189,7 @@ func AgentRun(ctx context.Context) error {
 		if pendingTopology == nil {
 			pendingTopology = r.TopologyFrame(g)
 		}
-		assignment, err := wire.Sync(call, conn, &wire.Hello{Topology: pendingTopology, WorkerID: id, Generation: generation, GuardVersion: guardVersion, Status: b, Results: results, CSR: csr})
+		assignment, err := wire.Sync(call, conn, &wire.Hello{RoutingVersion: 2, Topology: pendingTopology, WorkerID: id, Generation: generation, GuardVersion: guardVersion, Status: b, Results: results, CSR: csr})
 		cancel()
 		if err != nil {
 			if online {
@@ -218,12 +222,12 @@ func AgentRun(ctx context.Context) error {
 			if a.state.Config != nil {
 				a.state.Config.LeaseUntil = assignment.LeaseUntil
 			}
-			if time.Since(lastLeaseWrite) > time.Minute || len(results) > 0 {
+			if time.Since(lastLeaseWrite) > time.Minute || len(results) > 0 || a.runtime.rolloverDirty.Load() {
 				a.saveLocked()
 				lastLeaseWrite = time.Now()
 			}
 			a.mu.Unlock()
-			if guardOK && assignment.Config != nil && assignment.Generation > generation && a.failed.Load() != assignment.Generation && a.applying.CompareAndSwap(0, assignment.Generation) {
+			if guardOK && assignment.Config != nil && assignment.Generation > generation && a.mayRetryConfiguration(assignment.Generation, time.Now()) && a.applying.CompareAndSwap(0, assignment.Generation) {
 				go a.apply(*assignment)
 			}
 			for _, command := range assignment.Commands {
@@ -269,7 +273,7 @@ func (a *Agent) apply(assignment wire.Assignment) {
 		c.UDP.Advertise = host
 	}
 	if e := c.Validate(); e != nil {
-		a.failed.Store(assignment.Generation)
+		a.configurationFailed(assignment.Generation)
 		return
 	}
 	a.mu.Lock()
@@ -292,17 +296,17 @@ func (a *Agent) apply(assignment wire.Assignment) {
 	persistErr := a.saveLocked()
 	a.mu.Unlock()
 	if persistErr != nil {
-		a.failed.Store(assignment.Generation)
+		a.configurationFailed(assignment.Generation)
 		slog.Error("revocation state could not be persisted")
 		return
 	}
 	if e := a.install(ctx, c, assignment.Artifacts); e != nil {
-		a.failed.Store(assignment.Generation)
+		a.configurationFailed(assignment.Generation)
 		slog.Error("configuration artifact preparation failed", "generation", assignment.Generation, "reason", core.ArtifactFailureCode(e))
 		return
 	}
 	if e := a.runtime.Apply(ctx, c, a.gateway); e != nil {
-		a.failed.Store(assignment.Generation)
+		a.configurationFailed(assignment.Generation)
 		slog.Error("configuration rejected; previous revision retained", "generation", assignment.Generation, "reason", e.Error())
 		return
 	}
@@ -323,7 +327,7 @@ func (a *Agent) apply(assignment wire.Assignment) {
 			a.runtime.drained.Store(true)
 		}
 		slog.Error("last known good persistence failed")
-		a.failed.Store(assignment.Generation)
+		a.configurationFailed(assignment.Generation)
 		return
 	}
 	a.failed.Store(0)
@@ -488,6 +492,7 @@ func (a *Agent) saveLocked() error {
 }
 
 type mutableState struct {
+	Rollovers    []rolloverRecord       `json:"rollovers,omitempty"`
 	GuardVersion int64                  `json:"guard_version,omitempty"`
 	ProbeDay     time.Time              `json:"probe_day"`
 	ProbeBudget  map[string]int64       `json:"probe_budget"`
@@ -504,6 +509,7 @@ func (a *Agent) saveMeta() error {
 	m.ProbeDay, m.ProbeBudget = a.state.ProbeDay, a.state.ProbeBudget
 	if a.runtime != nil {
 		a.runtime.mu.RLock()
+		m.Rollovers = a.runtime.rolloverRecordsLocked()
 		m.ProbeDay = a.runtime.probeWindow
 		m.ProbeBudget = map[string]int64{}
 		for k, v := range a.runtime.budget {
@@ -522,7 +528,13 @@ func (a *Agent) saveMeta() error {
 	if _, e = rand.Read(nonce); e != nil {
 		return e
 	}
-	return store.AtomicFile(filepath.Join(a.dir, "worker-meta.enc"), a.aead.Seal(nonce, nonce, plain, []byte("relayweave-meta-v1")), 0600)
+	if e = store.AtomicFile(filepath.Join(a.dir, "worker-meta.enc"), a.aead.Seal(nonce, nonce, plain, []byte("relayweave-meta-v1")), 0600); e != nil {
+		return e
+	}
+	if a.runtime != nil {
+		a.runtime.acknowledgeRollovers(m.Rollovers)
+	}
+	return nil
 }
 func (a *Agent) loadMeta() error {
 	b, e := readBounded(filepath.Join(a.dir, "worker-meta.enc"), 2<<20)
@@ -553,6 +565,10 @@ func (a *Agent) loadMeta() error {
 		a.state.Done = m.Done
 	}
 	a.state.Results = m.Results
+	if len(m.Rollovers) > processLimit {
+		return fmt.Errorf("worker_metadata_corrupt")
+	}
+	a.state.Rollovers = m.Rollovers
 	a.state.Drained = m.Drained
 	if m.Fence > a.state.FenceGeneration || m.Generation > a.state.Generation {
 		a.state.FenceGeneration = max(m.Fence, a.state.FenceGeneration)

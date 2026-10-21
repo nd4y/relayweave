@@ -170,3 +170,18 @@ func checkHost(ctx context.Context, host string, allowPrivate bool) error {
 	}
 	return nil
 }
+
+// ResolveProxyHost checks the entire answer before returning any address. The
+// caller must dial a returned literal, rather than resolving the name again.
+func ResolveProxyHost(ctx context.Context, host string, allowPrivate bool) ([]netip.Addr, error) {
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil || len(ips) == 0 {
+		return nil, fmt.Errorf("proxy_dns_failed")
+	}
+	for _, ip := range ips {
+		if !permitted(ip, allowPrivate) {
+			return nil, fmt.Errorf("proxy_address_blocked")
+		}
+	}
+	return ips, nil
+}

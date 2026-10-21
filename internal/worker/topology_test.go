@@ -44,7 +44,7 @@ func TestScoreEvidenceContainsActualOperandsAndSurvivesMetricChanges(t *testing.
 	}
 }
 
-func TestTopologyRecordsActualTwoChoiceWithoutChangingSelection(t *testing.T) {
+func TestTopologyRecordsActualAutomaticWeightsWithoutChangingSelection(t *testing.T) {
 	plain, observed := selectionFixture("throughput"), selectionFixture("throughput")
 	for _, r := range []*Runtime{plain, observed} {
 		r.config.Generation = 42
@@ -58,7 +58,7 @@ func TestTopologyRecordsActualTwoChoiceWithoutChangingSelection(t *testing.T) {
 		if got[0].Config.ID != want[0].Config.ID {
 			t.Fatal("instrumentation changed selection")
 		}
-		if d.Generation != 42 || d.Method != "deterministic_two_choice" || d.Mode != "throughput" {
+		if d.Generation != 42 || d.Method != "automatic_observed_weight_choice" || d.Mode != "throughput" {
 			t.Fatalf("missing evidence %+v", d)
 		}
 		compared := 0
@@ -68,7 +68,7 @@ func TestTopologyRecordsActualTwoChoiceWithoutChangingSelection(t *testing.T) {
 			}
 		}
 		if compared != 2 {
-			t.Fatal("expected actual pair scores")
+			t.Fatal("expected actual inverse allocation weights")
 		}
 	}
 }

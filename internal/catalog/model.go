@@ -10,6 +10,9 @@ import (
 )
 
 type Source struct {
+	ProxyAllowCIDRs []string          `json:"proxy_allow_cidrs,omitempty"`
+	UpdatePolicy    string            `json:"update_policy,omitempty"`
+	LastFetched     time.Time         `json:"last_fetched,omitempty"`
 	URL             string            `json:"url"`
 	Headers         map[string]string `json:"headers"`
 	Enabled         bool              `json:"enabled"`
@@ -28,26 +31,29 @@ type Source struct {
 	Quota           map[string]int64  `json:"quota,omitempty"`
 }
 type Profile struct {
-	Present         bool            `json:"present"`
-	SourceID        string          `json:"source_id"`
-	Name            string          `json:"name"`
-	Protocol        string          `json:"protocol"`
-	Host            string          `json:"host"`
-	Port            int             `json:"port"`
-	Transport       string          `json:"transport"`
-	Security        string          `json:"security"`
-	Country         string          `json:"country"`
-	CountryInferred bool            `json:"country_inferred"`
-	UDP             bool            `json:"udp"`
-	Supported       bool            `json:"supported"`
-	Reason          string          `json:"reason,omitempty"`
-	Enabled         bool            `json:"enabled"`
-	CoreVersion     string          `json:"core_version,omitempty"`
-	CoreOverride    bool            `json:"core_override"`
-	Fingerprint     string          `json:"fingerprint"`
-	Identity        string          `json:"identity"`
-	Outbound        json.RawMessage `json:"outbound,omitempty"`
-	Warnings        []string        `json:"warnings,omitempty"`
+	RetiredUntil    time.Time        `json:"retired_until,omitempty"`
+	FrozenUntil     time.Time        `json:"frozen_until,omitempty"`
+	Previous        []RevisionPermit `json:"previous,omitempty"`
+	Present         bool             `json:"present"`
+	SourceID        string           `json:"source_id"`
+	Name            string           `json:"name"`
+	Protocol        string           `json:"protocol"`
+	Host            string           `json:"host"`
+	Port            int              `json:"port"`
+	Transport       string           `json:"transport"`
+	Security        string           `json:"security"`
+	Country         string           `json:"country"`
+	CountryInferred bool             `json:"country_inferred"`
+	UDP             bool             `json:"udp"`
+	Supported       bool             `json:"supported"`
+	Reason          string           `json:"reason,omitempty"`
+	Enabled         bool             `json:"enabled"`
+	CoreVersion     string           `json:"core_version,omitempty"`
+	CoreOverride    bool             `json:"core_override"`
+	Fingerprint     string           `json:"fingerprint"`
+	Identity        string           `json:"identity"`
+	Outbound        json.RawMessage  `json:"outbound,omitempty"`
+	Warnings        []string         `json:"warnings,omitempty"`
 }
 type Filter struct {
 	Mode        string      `json:"mode"`
@@ -185,6 +191,7 @@ type Aggregate struct {
 	Dedupe      bool     `json:"dedupe"`
 }
 type Pool struct {
+	Automatic   bool     `json:"automatic,omitempty"`
 	AggregateID string   `json:"aggregate_id"`
 	SourceIDs   []string `json:"source_ids"`
 	ProfileIDs  []string `json:"profile_ids"`
@@ -192,6 +199,7 @@ type Pool struct {
 	Enabled     bool     `json:"enabled"`
 }
 type Policy struct {
+	DisableSpeedProbes   bool     `json:"disable_speed_probes,omitempty"`
 	Mode                 string   `json:"mode"`
 	PoolID               string   `json:"pool_id"`
 	ActivePaths          int      `json:"active_paths"`
@@ -229,7 +237,7 @@ func (p *Policy) Defaults() {
 		p.ProbeIntervalSeconds = 30
 	}
 	if p.ProbeBudgetBytes == 0 {
-		p.ProbeBudgetBytes = 128 << 20
+		p.ProbeBudgetBytes = 256 << 20
 	}
 	if p.ConnectTimeoutMS == 0 {
 		p.ConnectTimeoutMS = 3000
@@ -242,7 +250,13 @@ func (p *Policy) Defaults() {
 		p.ProbeFallbackURLs = []string{"https://cp.cloudflare.com/generate_204"}
 	}
 	p.FailClosed = true
+	if p.SpeedURL == "" && !p.DisableSpeedProbes {
+		p.SpeedURL = DefaultSpeedURL
+	}
 }
+
+const DefaultSpeedURL = "https://speed.cloudflare.com/__down?bytes=8388608"
+
 func (p Policy) Validate() error {
 	if p.ProbeScope != "" && p.ProbeScope != "auto" && p.ProbeScope != "shared" && p.ProbeScope != "target" {
 		return fmt.Errorf("invalid probe scope")

@@ -194,6 +194,7 @@ func (a *Agent) adaptiveProbes() {
 		case <-a.ctx.Done():
 			return
 		case <-ticker.C:
+			a.probeUDPCapability(a.ctx)
 			cfg := a.runtime.Configuration()
 			now := time.Now()
 			a.runtime.mu.RLock()
@@ -217,6 +218,18 @@ func (a *Agent) adaptiveProbes() {
 			choices := []candidate{}
 			seen := map[string]bool{}
 			for _, p := range cfg.Policies {
+				// Automatic throughput bursts may use only the first half of
+				// the shared daily budget. Preserve the other half for health.
+				a.runtime.mu.RLock()
+				reserved := a.runtime.reservedProbeBudgetLocked()
+				ceiling := p.ProbeBudgetBytes
+				for _, other := range cfg.Policies {
+					ceiling = max(ceiling, other.ProbeBudgetBytes)
+				}
+				a.runtime.mu.RUnlock()
+				if reserved+(8<<20) > ceiling/2 {
+					continue
+				}
 				if p.SpeedURL != "" && p.ProbeBudgetBytes >= 8<<20 {
 					for _, route := range a.runtime.Candidates("policy:" + p.ID) {
 						attempt, requested := route.LastProbeAttempt.Load(), route.ProbeRequestedAt.Load()

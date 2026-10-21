@@ -20,7 +20,7 @@ func candidateEvidence(v *Route, score *float64, reason string) topology.Candida
 func (r *Runtime) captureCandidatesLocked(p *policyState, result []*Route, d *topology.Decision, now time.Time) {
 	if p != nil {
 		d.Mode = p.config.Mode
-		if d.Method != "deterministic_two_choice" && d.Method != "isp_weighted_path_choice" {
+		if d.Method != "deterministic_two_choice" && d.Method != "isp_weighted_path_choice" && d.Method != "automatic_observed_weight_choice" {
 			d.Method = p.config.Mode
 		}
 	}

@@ -12,6 +12,7 @@ import (
 // EgressPath selects a local source address. The network operator must enforce
 // a strict source-based WAN route; a bind alone is not evidence of an ISP.
 type EgressPath struct {
+	WeightMode   string `json:"weight_mode,omitempty"`
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	SourceIP     string `json:"source_ip"`
@@ -28,6 +29,9 @@ func ValidateEgressPaths(paths []EgressPath) error {
 	ids, sources := map[string]bool{}, map[string]bool{}
 	enabled := 0
 	for _, p := range paths {
+		if p.WeightMode != "" && p.WeightMode != "auto" && p.WeightMode != "manual" {
+			return fmt.Errorf("invalid ISP weight mode")
+		}
 		ip := net.ParseIP(p.SourceIP)
 		if !id.MatchString(p.ID) || ids[p.ID] || len(p.Name) > 80 || ip == nil || ip.IsUnspecified() || ip.IsMulticast() || sources[ip.String()] || p.Weight < 1 || p.Weight > 1000 || p.DownloadMbps < 1 || p.DownloadMbps > 100000 || p.UploadMbps < 1 || p.UploadMbps > 100000 {
 			return fmt.Errorf("invalid ISP path")
