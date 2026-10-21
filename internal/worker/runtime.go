@@ -19,6 +19,7 @@ import (
 
 	"proxyplatform/internal/config"
 	"proxyplatform/internal/core"
+	"proxyplatform/internal/routertelemetry"
 	"proxyplatform/internal/topology"
 )
 
@@ -46,37 +47,41 @@ type policyState struct {
 	chosen           string
 	changed          time.Time
 	egressCredit     map[string]float64
+	profileCredit    map[string]map[string]float64
 }
 type Runtime struct {
-	ctx          context.Context
-	mu           sync.RWMutex
-	applyMu      sync.Mutex
-	config       config.Config
-	entries      map[string]*engineEntry
-	current      map[string]*engineEntry
-	policies     map[string]*policyState
-	valid        map[string]time.Time
-	slots        map[int]bool
-	cursor       atomic.Uint64
-	drained      atomic.Bool
-	lease        atomic.Int64
-	probeBytes   atomic.Int64
-	probeWindow  time.Time
-	budget       map[string]int64
-	visited      map[string]time.Time
-	coldCursor   int
-	constraints  *config.Config
-	liveGuard    *config.LiveGuard
-	allowed      map[string]map[string]string
-	hardExpiry   map[string]time.Time
-	staging      map[string]probePermit
-	admission    map[string]*atomic.Int64
-	rootDir      string
-	retiredUp    atomic.Int64
-	retiredDown  atomic.Int64
-	dnsMu        sync.Mutex
-	endpointIPs  map[string]endpointResolution
-	targetHealth map[string]targetObservation
+	ctx             context.Context
+	mu              sync.RWMutex
+	applyMu         sync.Mutex
+	config          config.Config
+	entries         map[string]*engineEntry
+	current         map[string]*engineEntry
+	policies        map[string]*policyState
+	valid           map[string]time.Time
+	slots           map[int]bool
+	cursor          atomic.Uint64
+	drained         atomic.Bool
+	lease           atomic.Int64
+	probeBytes      atomic.Int64
+	probeWindow     time.Time
+	budget          map[string]int64
+	visited         map[string]time.Time
+	coldCursor      int
+	constraints     *config.Config
+	liveGuard       *config.LiveGuard
+	allowed         map[string]map[string]string
+	hardExpiry      map[string]time.Time
+	staging         map[string]probePermit
+	admission       map[string]*atomic.Int64
+	rootDir         string
+	retiredUp       atomic.Int64
+	retiredDown     atomic.Int64
+	dnsMu           sync.Mutex
+	endpointIPs     map[string]endpointResolution
+	targetHealth    map[string]targetObservation
+	routerTelemetry *routertelemetry.Consumer
+	ispObservations map[string]ispObservation
+	ispAllocations  map[string]allocationEvidence
 }
 
 func NewRuntime(ctx context.Context, roots ...string) *Runtime {
@@ -562,12 +567,16 @@ func (r *Runtime) candidatesObserved(key string, decision *topology.Decision) (r
 			reason := ""
 			if !r.permitted(p.config.ID, v.Config) {
 				reason = "route_revoked"
+			} else if !r.egressEnabledLocked(v.Config.EgressID) {
+				reason = "isp_disabled"
 			} else if !v.Instance.Ready.Load() {
 				reason = "core_not_ready"
 			} else if !until.IsZero() && !now.Before(until) {
 				reason = "subscription_expired"
 			} else if v.BlockedUntil.Load() > now.UnixNano() {
 				reason = "circuit_open"
+			} else if r.telemetryDownLocked(v.Config.EgressID, now) {
+				reason = "isp_link_down"
 			}
 			if reason == "" {
 				out = append(out, v)
@@ -580,7 +589,7 @@ func (r *Runtime) candidatesObserved(key string, decision *topology.Decision) (r
 	} else {
 		for id, e := range r.current {
 			until := r.valid[id]
-			if r.permitted("", e.route.Config) && (key == "" || key == id) && e.route.Instance.Ready.Load() && (until.IsZero() || now.Before(until)) {
+			if r.permitted("", e.route.Config) && r.egressEnabledLocked(e.route.Config.EgressID) && (key == "" || key == id) && e.route.Instance.Ready.Load() && (until.IsZero() || now.Before(until)) && !r.telemetryDownLocked(e.route.Config.EgressID, now) {
 				out = append(out, e.route)
 			}
 		}
@@ -606,6 +615,20 @@ func (r *Runtime) candidatesObserved(key string, decision *topology.Decision) (r
 	}
 	if p != nil && len(r.config.EgressPaths) > 0 && (mode == "auto" || mode == "throughput" || mode == "round-robin") {
 		return r.selectEgressLocked(p, out, decision)
+	}
+	if p != nil && (mode == "auto" || mode == "throughput") {
+		limit := min(len(out), max(1, p.config.ActivePaths))
+		best := r.selectAutomaticProfileLocked(p, out[:limit], decision)
+		if decision != nil {
+			decision.Method = "automatic_profile_weights"
+		}
+		result := []*Route{best}
+		for _, v := range out {
+			if v != best {
+				result = append(result, v)
+			}
+		}
+		return result
 	}
 	switch mode {
 	case "manual":

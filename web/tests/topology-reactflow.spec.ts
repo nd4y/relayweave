@@ -138,6 +138,28 @@ async function fixture(page: Page, value = snapshot()) {
   ).toHaveCount(0);
 }
 
+for (const telemetry of ["fresh", "autonomous"]) {
+  test(`automatic weights explain ${telemetry} routing`, async ({ page }) => {
+    const value = snapshot();
+    Object.assign(value.workers[0].decisions[0].candidates[0], {
+      egress: "isp2", weight_mode: "automatic", egress_base_weight: 4.75,
+      egress_effective_weight: telemetry === "fresh" ? 0.95 : 4.75,
+      egress_active: 3, profile_weight: 0.8, group_active: 3,
+      telemetry_state: telemetry, wan_factor: telemetry === "fresh" ? 0.2 : 1,
+      ...(telemetry === "fresh" ? { wan_utilization: 0.8, telemetry_at: new Date().toISOString() } : {}),
+    });
+    await fixture(page, value);
+    const shared = page.locator('[data-model-id="ip-group:203.0.113.10|203.0.113.11"]');
+    await shared.locator(".rw-card-title").first().click();
+    await page.getByRole("button", { name: /Выбран действующей политикой/ }).click();
+    const evidence = page.getByRole("table", { name: "Альтернативы выбора" });
+    await expect(evidence).toContainText("автоматический вес");
+    await expect(evidence).toContainText("Относительный вес IP-группы");
+    await expect(evidence).toContainText(telemetry === "fresh" ? "Телеметрия роутера" : "Автономная автоматика");
+    if (telemetry === "fresh") await expect(evidence).toContainText("загрузка WAN 80");
+  });
+}
+
 test("ISP paths remain visible inside shared server IP groups", async ({ page }) => {
   const value = snapshot();
   value.workers[0].routes.forEach((r, i) => Object.assign(r, { egress: i === 1 ? "isp2" : "isp1", profile_id: "profile-" + r.id }));

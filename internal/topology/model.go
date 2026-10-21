@@ -5,27 +5,35 @@ package topology
 import "time"
 
 type Candidate struct {
-	Egress                string   `json:"egress,omitempty"`
-	EgressWeight          int      `json:"egress_weight,omitempty"`
-	EgressActive          int64    `json:"egress_active,omitempty"`
-	EgressEffectiveWeight float64  `json:"egress_effective_weight,omitempty"`
-	Route                 string   `json:"route"`
-	Engine                string   `json:"engine"`
-	Active                int64    `json:"active"`
-	Score                 *float64 `json:"score,omitempty"`
-	Reason                string   `json:"reason"`
-	Group                 string   `json:"group,omitempty"`
-	SpeedBPS              int64    `json:"speed_bps"`
-	MeasurementAt         int64    `json:"measurement_at"`
-	Factors               []string `json:"factors,omitempty"`
-	EffectiveRTTMS        float64  `json:"effective_rtt_ms,omitempty"`
-	ConsecutiveFailures   int64    `json:"consecutive_failures,omitempty"`
-	ErrorEWMA             int64    `json:"error_ewma,omitempty"`
-	SpeedUsedBPS          int64    `json:"speed_used_bps,omitempty"`
-	SpeedSource           string   `json:"speed_source,omitempty"`
-	PassiveAt             int64    `json:"passive_at,omitempty"`
-	CeilingBPS            int64    `json:"ceiling_bps,omitempty"`
-	Formula               string   `json:"formula,omitempty"`
+	Egress                string     `json:"egress,omitempty"`
+	EgressWeight          int        `json:"egress_weight,omitempty"`
+	EgressActive          int64      `json:"egress_active,omitempty"`
+	EgressEffectiveWeight float64    `json:"egress_effective_weight,omitempty"`
+	EgressBaseWeight      float64    `json:"egress_base_weight,omitempty"`
+	WeightMode            string     `json:"weight_mode,omitempty"`
+	ProfileWeight         float64    `json:"profile_weight,omitempty"`
+	GroupActive           int64      `json:"group_active,omitempty"`
+	TelemetryState        string     `json:"telemetry_state,omitempty"`
+	TelemetryAt           *time.Time `json:"telemetry_at,omitempty"`
+	WANUtilization        *float64   `json:"wan_utilization,omitempty"`
+	WANFactor             float64    `json:"wan_factor,omitempty"`
+	Route                 string     `json:"route"`
+	Engine                string     `json:"engine"`
+	Active                int64      `json:"active"`
+	Score                 *float64   `json:"score,omitempty"`
+	Reason                string     `json:"reason"`
+	Group                 string     `json:"group,omitempty"`
+	SpeedBPS              int64      `json:"speed_bps"`
+	MeasurementAt         int64      `json:"measurement_at"`
+	Factors               []string   `json:"factors,omitempty"`
+	EffectiveRTTMS        float64    `json:"effective_rtt_ms,omitempty"`
+	ConsecutiveFailures   int64      `json:"consecutive_failures,omitempty"`
+	ErrorEWMA             int64      `json:"error_ewma,omitempty"`
+	SpeedUsedBPS          int64      `json:"speed_used_bps,omitempty"`
+	SpeedSource           string     `json:"speed_source,omitempty"`
+	PassiveAt             int64      `json:"passive_at,omitempty"`
+	CeilingBPS            int64      `json:"ceiling_bps,omitempty"`
+	Formula               string     `json:"formula,omitempty"`
 }
 type Decision struct {
 	Epoch      string      `json:"epoch,omitempty"`

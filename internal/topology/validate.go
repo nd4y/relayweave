@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"math"
 	"net/netip"
 	"strings"
 )
@@ -39,6 +40,12 @@ func validFrame(f Frame) bool {
 			return false
 		}
 		for _, c := range d.Candidates {
+			if !bounded(c.WeightMode, 24) || !bounded(c.TelemetryState, 24) || math.IsNaN(c.EgressEffectiveWeight) || math.IsInf(c.EgressEffectiveWeight, 0) || c.EgressEffectiveWeight < 0 || c.ProfileWeight < 0 || c.ProfileWeight > 1 || math.IsNaN(c.ProfileWeight) || math.IsInf(c.ProfileWeight, 0) {
+				return false
+			}
+			if c.WANUtilization != nil && (math.IsNaN(*c.WANUtilization) || math.IsInf(*c.WANUtilization, 0) || *c.WANUtilization < 0 || *c.WANUtilization > 1.5) {
+				return false
+			}
 			if !bounded(c.Egress, 48) {
 				return false
 			}

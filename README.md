@@ -21,7 +21,8 @@ healthy paths, preferring distinct server IPs over a shared upstream balancer.
 - Health checks, bounded retries/backoff, last-good recovery and draining of existing sessions.
 - IP-diversity preference: overlapping observed server-IP sets form a shared group.
 - [Optional router telemetry](docs/router-integrations.md): vendor-neutral module
-  contract and read-only MikroTik API-SSL collector; observation mode only.
+  contract and read-only MikroTik API-SSL collector feeding optional adaptive
+  routing hints; automatic profile/ISP weights also work without a router.
 - [Proxy + ISP paths](docs/dualwan.md): source-bound Xray routes, weighted lane
   selection and disabled-path fencing; requires strict host/router routing.
 - React Flow traffic map, browser-side ELK layout, profile expansion and recorded

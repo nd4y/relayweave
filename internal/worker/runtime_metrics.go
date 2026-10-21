@@ -88,7 +88,7 @@ func (r *Runtime) Status(g *Gateway) map[string]any {
 		policies = append(policies, map[string]any{"id": id, "mode": p.config.Mode, "ready_paths": paths, "catalog_size": len(p.config.Routes), "probe_budget_remaining_bytes": max(int64(0), p.config.ProbeBudgetBytes-used)})
 		policies[len(policies)-1]["probe_scope"] = p.config.ProbeScope
 	}
-	return map[string]any{"egress_paths": r.config.EgressPaths, "architecture": runtime.GOARCH, "cores": engines, "routes": engines, "policies": policies, "catalog_size": len(r.config.Routes), "active_connections": g.active.Load(), "udp_associations": g.udpActive.Load(), "udp_drops": g.udpDrops.Load(), "udp_packets": g.udpPackets.Load(), "drained": r.drained.Load(), "lease_until": r.lease.Load(), "probe_bytes": r.probeBytes.Load(), "probe_budget_reserved_bytes": r.reservedProbeBudgetLocked(), "probe_budget_day": r.probeWindow.UTC().Truncate(24 * time.Hour).Format("2006-01-02"), "payload_bytes_up": up, "payload_bytes_down": down}
+	return map[string]any{"routing_automation": map[string]any{"profiles": "automatic_in_balanced_modes", "weights": "automatic_in_auto_and_throughput", "router_telemetry": r.routerTelemetry.Status(time.Now()), "last_isp_allocations": r.ispAllocations}, "egress_paths": r.config.EgressPaths, "architecture": runtime.GOARCH, "cores": engines, "routes": engines, "policies": policies, "catalog_size": len(r.config.Routes), "active_connections": g.active.Load(), "udp_associations": g.udpActive.Load(), "udp_drops": g.udpDrops.Load(), "udp_packets": g.udpPackets.Load(), "drained": r.drained.Load(), "lease_until": r.lease.Load(), "probe_bytes": r.probeBytes.Load(), "probe_budget_reserved_bytes": r.reservedProbeBudgetLocked(), "probe_budget_day": r.probeWindow.UTC().Truncate(24 * time.Hour).Format("2006-01-02"), "payload_bytes_up": up, "payload_bytes_down": down}
 }
 func (r *Runtime) Metrics(output io.Writer) {
 	var buffer bytes.Buffer
@@ -98,6 +98,18 @@ func (r *Runtime) Metrics(output io.Writer) {
 		defer r.mu.RUnlock()
 		w := &buffer
 		ready := 0
+		telemetry := r.routerTelemetry.Status(time.Now())
+		fmt.Fprintf(w, "proxy_router_telemetry_state_info{state=%q} 1\n", telemetry.State)
+		for _, s := range telemetry.Signals {
+			fresh := 0
+			if s.Fresh {
+				fresh = 1
+			}
+			fmt.Fprintf(w, "proxy_router_telemetry_fresh{isp=%q} %d\n", s.ISP, fresh)
+		}
+		for isp, a := range r.ispAllocations {
+			fmt.Fprintf(w, "proxy_isp_last_effective_weight{isp=%q,policy=%q} %g\nproxy_isp_last_wan_factor{isp=%q,policy=%q} %g\nproxy_isp_last_selection_timestamp_seconds{isp=%q,policy=%q} %d\n", isp, a.Policy, a.Effective, isp, a.Policy, a.Factor, isp, a.Policy, a.SelectedAt.Unix())
+		}
 		for _, p := range r.config.EgressPaths {
 			enabled := 0
 			if p.Enabled {

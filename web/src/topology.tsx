@@ -34,6 +34,14 @@ type Candidate = {
   egress_weight?: number;
   egress_active?: number;
   egress_effective_weight?: number;
+  egress_base_weight?: number;
+  weight_mode?: string;
+  profile_weight?: number;
+  group_active?: number;
+  telemetry_state?: string;
+  telemetry_at?: string;
+  wan_utilization?: number;
+  wan_factor?: number;
   route: string;
   engine: string;
   active: number;
@@ -174,7 +182,11 @@ export type Edge = {
 const reason: Record<string, string> = {
   selected_by_policy: "Выбран действующей политикой",
   isp_weighted_path_selected:
-    "Выбрана пара прокси + ISP по весу и числу активных соединений",
+    "Пара прокси + ISP выбрана по рассчитанным долям и текущей нагрузке",
+  automatic_profile_weight_selected: "Автоматически выбран профиль в IP-группе",
+  automatic_profile_weight_compared: "Сравнивался автоматический вес IP-группы",
+  isp_link_down: "Роутер сообщил, что канал ISP недоступен",
+  isp_disabled: "Канал ISP отключён в конфигурации RelayWeave",
   target_connect_failed: "Не удалось установить транспортное соединение",
   probe_failed: "Проверка назначения политики не пройдена",
   early_transport_close: "Туннель рано закрыт без ответа; причина неизвестна",
@@ -1699,12 +1711,47 @@ export function TrafficTopology({
                               ? "не сравнивался"
                               : metric(c.score, 3)}{" "}
                             / {c.active}
-                            {!!c.egress_weight && (
+                            {(!!c.egress_weight || !!c.weight_mode) && (
                               <Typography variant="caption" display="block">
-                                ISP {c.egress}: вес {c.egress_weight},
-                                соединений {c.egress_active ?? 0}, эффективный
+                                ISP {c.egress}:{" "}
+                                {c.weight_mode === "automatic"
+                                  ? "автоматический"
+                                  : "настроенный"}{" "}
                                 вес{" "}
-                                {metric(c.egress_effective_weight ?? null, 2)}
+                                {metric(c.egress_effective_weight ?? null, 2)},
+                                база{" "}
+                                {metric(
+                                  c.egress_base_weight ??
+                                    c.egress_weight ??
+                                    null,
+                                  2,
+                                )}
+                                , соединений {c.egress_active ?? 0}
+                              </Typography>
+                            )}
+                            {c.telemetry_state && (
+                              <Typography variant="caption" display="block">
+                                {c.telemetry_state === "fresh"
+                                  ? "Телеметрия роутера"
+                                  : c.telemetry_state === "link_down"
+                                    ? "WAN недоступен"
+                                    : "Автономная автоматика"}
+                                {c.wan_utilization !== undefined
+                                  ? ` · загрузка WAN ${metric(c.wan_utilization * 100)}%`
+                                  : ""}
+                                {c.wan_factor !== undefined
+                                  ? ` · коэффициент ${metric(c.wan_factor, 2)}`
+                                  : ""}
+                                {c.telemetry_at
+                                  ? ` · снимок ${new Date(c.telemetry_at).toLocaleTimeString()}`
+                                  : ""}
+                              </Typography>
+                            )}
+                            {c.profile_weight !== undefined && (
+                              <Typography variant="caption" display="block">
+                                Относительный вес IP-группы{" "}
+                                {metric(c.profile_weight, 2)} · активных{" "}
+                                {c.group_active ?? 0}
                               </Typography>
                             )}
                             {c.score !== undefined && (

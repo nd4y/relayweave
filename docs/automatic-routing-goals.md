@@ -62,7 +62,9 @@ worker/router resource cost and exact source/image identity. Performance claims
 require repeated real measurements and an explanation of the available path
 capacity. A synthetic scheduler distribution test is not a throughput result.
 
-Current gaps include static configured ISP weights and session-count load
-approximation, mandatory review of some subscription changes, and the absence
-of a routing consumer for the new observation-only router module. These must be
-addressed and accepted independently before calling the product fully automatic.
+Current automatic modes compute ISP and shared-IP profile weights using local
+quality/load observations, optionally assisted by whole-WAN router telemetry.
+Remaining limits include the session-count load approximation, heuristic
+capacity priors and mandatory review of some subscription changes. Routine
+subscription rollover and advanced traffic classification remain independent
+acceptance work; do not call the entire product complete based on this selector.

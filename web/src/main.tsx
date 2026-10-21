@@ -92,6 +92,7 @@ import { CoreApproval } from "./core-approval";
 import { CoreCache } from "./core-cache";
 import { countRu } from "./counts";
 import { TrafficTopology } from "./topology";
+import { OverviewNetworkArt } from "./overview-network-art";
 import "./styles.css";
 
 const grafanaURL = import.meta.env.VITE_GRAFANA_URL?.trim() || "";
@@ -1023,22 +1024,7 @@ function App() {
                           )}
                         </Stack>
                       </Box>
-                      <Box className="network-art" aria-hidden="true">
-                        <Box className="art-ring ring-a" />
-                        <Box className="art-ring ring-b" />
-                        <Box className="art-center">
-                          <HubRounded sx={{ fontSize: 48 }} />
-                        </Box>
-                        <Box className="art-node node-a">
-                          <BoltRounded />
-                        </Box>
-                        <Box className="art-node node-b">
-                          <ShieldRounded />
-                        </Box>
-                        <Box className="art-node node-c">
-                          <AltRouteRounded />
-                        </Box>
-                      </Box>
+                      <OverviewNetworkArt />
                     </Box>
                     <Box className="stat-grid" my={3}>
                       {[
@@ -2599,7 +2585,8 @@ function Settings({
                             required
                           />
                           <TextField
-                            label="Вес новых соединений"
+                            label="Вес для Round-robin"
+                            helperText="В режимах Авто и Пропускная способность вес рассчитывается автоматически"
                             type="number"
                             value={path.weight}
                             onChange={(e) =>

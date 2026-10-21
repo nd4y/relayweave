@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -27,6 +28,14 @@ func TestRealEgressHTTPAndSOCKSAndDisable(t *testing.T) {
 		t.Skip("real core opt-in")
 	}
 	version := os.Getenv("XRAY_EGRESS_TEST_VERSION")
+	holdRelease := make(chan struct{})
+	defer func() {
+		select {
+		case <-holdRelease:
+		default:
+			close(holdRelease)
+		}
+	}()
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Connection", "close")
 		if r.URL.Path == "/health" {
@@ -35,6 +44,14 @@ func TestRealEgressHTTPAndSOCKSAndDisable(t *testing.T) {
 		}
 		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 		fmt.Fprintln(w, ip)
+		if r.URL.Path == "/hold" {
+			w.(http.Flusher).Flush()
+			select {
+			case <-holdRelease:
+				fmt.Fprintln(w, "still-alive")
+			case <-r.Context().Done():
+			}
+		}
 	}))
 	defer origin.Close()
 	target := strings.Replace(origin.URL, "127.0.0.1", "origin.test", 1)
@@ -172,6 +189,137 @@ func TestRealEgressHTTPAndSOCKSAndDisable(t *testing.T) {
 	if udpCounts["127.0.0.2"] == 0 || udpCounts["127.0.0.3"] == 0 {
 		t.Fatal("SOCKS UDP did not use both paths", udpCounts)
 	}
+	openAssociation := func() (net.Conn, *net.UDPConn, func() string) {
+		control, host, port, e := socks.Request(ctx, socksListen, 3, "0.0.0.0", 0, 2*time.Second)
+		if e != nil {
+			t.Fatal(e)
+		}
+		down, e := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.ParseIP(host), Port: port})
+		if e != nil {
+			control.Close()
+			t.Fatal(e)
+		}
+		exchange := func() string {
+			down.SetDeadline(time.Now().Add(3 * time.Second))
+			address, _ := socks.Address("origin.test", udp.LocalAddr().(*net.UDPAddr).Port)
+			if _, e := down.Write(append(append([]byte{0, 0, 0}, address...), []byte("packet")...)); e != nil {
+				t.Fatal(e)
+			}
+			b := make([]byte, 4096)
+			n, e := down.Read(b)
+			if e != nil {
+				t.Fatal(e)
+			}
+			reader := bytes.NewReader(b[3:n])
+			if _, _, _, e = socks.ReadAddress(reader); e != nil {
+				t.Fatal(e)
+			}
+			reply, _ := io.ReadAll(reader)
+			return string(reply)
+		}
+		return control, down, exchange
+	}
+	var heldControl net.Conn
+	var heldUDP *net.UDPConn
+	var heldExchange func() string
+	for attempt := 0; attempt < 10; attempt++ {
+		control, down, exchange := openAssociation()
+		if exchange() == "127.0.0.2" {
+			heldControl, heldUDP, heldExchange = control, down, exchange
+			break
+		}
+		down.Close()
+		control.Close()
+	}
+	if heldUDP == nil {
+		t.Fatal("could not prepare ISP1 UDP association")
+	}
+	defer heldUDP.Close()
+	defer heldControl.Close()
+	// Keep a real TCP stream on ISP1 across telemetry-driven exclusion. Only new
+	// allocations move; no core/process/config is replaced by this signal.
+	var held net.Conn
+	var heldBody io.ReadCloser
+	for attempt := 0; attempt < 10; attempt++ {
+		conn, e := socks.Dial(ctx, socksListen, u.Host, 2*time.Second)
+		if e != nil {
+			t.Fatal(e)
+		}
+		conn.SetDeadline(time.Now().Add(10 * time.Second))
+		fmt.Fprintf(conn, "GET /hold HTTP/1.1\r\nHost: origin.test\r\n\r\n")
+		response, e := http.ReadResponse(bufio.NewReader(conn), nil)
+		if e != nil {
+			conn.Close()
+			t.Fatal(e)
+		}
+		reader := bufio.NewReader(response.Body)
+		line, e := reader.ReadString('\n')
+		if e != nil {
+			conn.Close()
+			t.Fatal(e)
+		}
+		if strings.TrimSpace(line) == "127.0.0.2" {
+			held = conn
+			heldBody = response.Body
+			break
+		}
+		conn.Close()
+	}
+	if held == nil {
+		t.Fatal("could not prepare ISP1 stream")
+	}
+	defer held.Close()
+	setTelemetry, refreshTelemetry := attachTelemetry(t, runtime)
+	setTelemetry(0, 0, true, time.Now())
+	refreshTelemetry()
+	if heldExchange() != "127.0.0.2" {
+		t.Fatal("existing UDP association migrated")
+	}
+	for i := 0; i < 4; i++ {
+		control, down, exchange := openAssociation()
+		source := exchange()
+		down.Close()
+		control.Close()
+		if source != "127.0.0.3" {
+			t.Fatal("new UDP association used down ISP")
+		}
+	}
+	for i := 0; i < 8; i++ {
+		response, e := client.Get(target)
+		if e != nil {
+			t.Fatal(e)
+		}
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if strings.TrimSpace(string(body)) != "127.0.0.3" {
+			t.Fatal("new TCP connection used down ISP")
+		}
+	}
+	close(holdRelease)
+	body, e := io.ReadAll(heldBody)
+	heldBody.Close()
+	held.Close()
+	if e != nil || !strings.Contains(string(body), "still-alive") {
+		t.Fatal("telemetry interrupted established TCP", e)
+	}
+	// A stale producer must stop influencing selection, without a router call or
+	// a config apply. Both local sources become usable under autonomous weights.
+	setTelemetry(0, 0, false, time.Now().Add(-time.Minute))
+	refreshTelemetry()
+	recovered := map[string]int{}
+	for i := 0; i < 20; i++ {
+		response, e := client.Get(target)
+		if e != nil {
+			t.Fatal(e)
+		}
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		recovered[strings.TrimSpace(string(body))]++
+	}
+	if recovered["127.0.0.2"] == 0 || recovered["127.0.0.3"] == 0 {
+		t.Fatal("stale telemetry prevented autonomous recovery", recovered)
+	}
+	t.Log("telemetry excluded ISP1 for new TCP/UDP; established TCP/UDP survived; stale fallback sources", recovered)
 	// Disable one lane in the desired revision. Its old processes may drain but
 	// no candidate can use them after the admission restriction is installed.
 	next := makeConfig(true)

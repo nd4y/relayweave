@@ -73,13 +73,15 @@ separate maintenance window or an isolated simulated failure.
 
 ## Scheduling and observability
 
-In auto, throughput and round-robin policies, smooth weighted scheduling chooses
-the ISP, then selects a proxy in that lane using route measurements and error/load
-scores. Aggregate active sessions lower a busy lane's effective share. Weights
-apply to ISP lanes, not to the number of subscription aliases. This estimates
-allocation of new connections, not exact byte fairness or measured free WAN
-capacity. Other household traffic is not automatically inferred from these
-session counts. Each route's speed ceiling is capped by its ISP download budget;
+In auto/throughput policies, ISP and shared-IP profile weights are calculated
+automatically from quality, throughput observations, capacity priors and active
+load. Explicit round-robin retains configured ISP weights. Optional read-only
+router telemetry can reduce new-flow allocation toward a congested WAN or avoid
+a freshly reported down link. Missing/stale telemetry leaves autonomous routing
+active. See [router integrations](router-integrations.md) for semantics, smoothing
+and fallback. Subscription aliases never multiply shared endpoint capacity.
+These are new-connection allocation estimates, not byte fairness or a guaranteed
+measurement of spare Internet capacity. Each route's speed ceiling is capped by its ISP download budget;
 upload settings are descriptive capacity budgets, not an upload shaper.
 
 Each healthy ISP gets a representative in the prepared candidate window. Server

@@ -1,15 +1,16 @@
 # Optional router telemetry modules
 
-Status: first read-only collector implemented; routing consumers, UI integration
-and adaptive ISP weights are separate future work. Installing this module does
-not change route selection. The ordinary RelayWeave stack has no dependency on
-the collector and starts without it. No Helm deployment is introduced.
+Status: read-only collector and optional worker consumer implemented. Auto and
+throughput policies automatically select profiles and ISP weights, with or
+without router telemetry. Installing the collector alone does not activate the
+consumer. The ordinary RelayWeave stack has no dependency on the collector and
+starts without it. No Helm deployment is introduced.
 
 The [automatic routing product contract](automatic-routing-goals.md) takes
 precedence: profile selection and weights must be automatic in the normal user
 journey. Router telemetry must remain optional and never become a requirement
 for good default behavior. The current observe-only module is an input for that
-future adaptive consumer, not completion of automatic ISP weighting.
+adaptive consumer; full product goals still require the remaining acceptance work.
 
 ## Architecture and contract
 
@@ -146,29 +147,52 @@ exists. Existing monitoring can scrape the authenticated metrics through an
 explicitly configured local relay; no embedded Grafana is added. Wiring that
 relay and dashboards is separate from the collector deployment.
 
-## Routing consumer design (not active in this version)
+## Worker routing consumer
 
-Three separate settings are required: module enabled, router enabled, and
-`observe` versus a future `assist` scheduling mode. Observing a physically active
-ISP does not enable that ISP in RelayWeave. Operator-disabled paths always remain
-ineligible, even when telemetry says the WAN is healthy or idle.
+Three gates are independent: collector enabled, router enabled, and worker consumer
+configured. Merge `compose.worker.yaml` after a Linux host-network worker deployment
+and set `ROUTER_TELEMETRY_TOKEN_PATH` to the collector consumer-token file. The
+worker receives only that token, never the router password or CA. Its endpoint is
+`ROUTER_TELEMETRY_URL=http://127.0.0.1:18530/v1/snapshot`, and
+`ROUTER_TELEMETRY_TOKEN_FILE=/router-telemetry/token`. A missing URL disables the
+consumer without disabling automatic routing. Invalid config or failed reads
+fall back without preventing worker startup. Only literal loopback HTTP URLs,
+the snapshot path, bounded responses and no redirects are accepted. No router
+command can be issued through this consumer.
 
-The future assist consumer will combine calibrated directional bandwidth
-budgets, smoothed utilization, queue/RTT inflation and existing per-(proxy,ISP)
-health checks. It adjusts new-connection weights with hysteresis, bounded change
-rate and limited exploration. Link-up alone never proves Internet availability.
-Telemetry cannot override proxy circuit breakers or eliminate all share from a
-healthy lane merely due to one noisy sample. Loss/staleness falls back to the
-current autonomous weighted scheduling and probes, without blocking connections.
-TCP sessions and UDP associations remain pinned; no single-stream bonding or
-automatic migration of established NAT sessions is promised.
+Auto/throughput modes derive ISP weights from capacity budgets as priors, the
+best eligible profile quality, positive fresh throughput evidence and aggregate
+live sessions. Configured `weight` is used by explicit round-robin mode (and
+legacy test configurations lacking capacity budgets), not the automatic modes.
+Within each ISP, smooth weighted scheduling chooses shared server-IP groups by
+inverse observed service cost and aggregate active load, then the best profile
+inside the chosen group. Aliases do not sum independent capacity. Existing core,
+probe, target-health, revocation and subscription admission filters remain.
 
-Decision evidence must retain the exact snapshot ID/time, measured age,
-capabilities, current ISP eligibility, utilization and score operands actually
-used. UI should show module status, last successful read, test-connection action,
-WAN-to-ISP mapping, missing capabilities and a clear observation-only badge.
-Traffic-map ISP cards can then show total WAN usage alongside RelayWeave traffic
-and explain why a new flow was assigned. No secrets belong in browser state.
+Fresh directional WAN rates relative to configured budgets yield a congestion
+factor using the larger download/upload utilization. A 5 percentage-point
+ deadband, EWMA and 25% maximum per-sample factor change reduce oscillation. The
+factor retains a 0.1 floor; router counters do not measure true spare Internet
+capacity. Fresh explicit link-down/disabled observations suppress only new
+allocations and retries on that ISP. They never kill cores, move established TCP
+sessions/UDP associations or enable an operator-disabled path. Link-up alone
+never proves Internet/proxy availability.
+
+A background poll every 2 seconds has a 600ms client timeout and a 128KiB body
+limit. No HTTP/router/DNS request is made by the selector. A failed fetch,
+producer timestamp older than 10 seconds, expired local cache, clock anomaly,
+unsupported version or ambiguous/malformed observations remove the advisory
+input. Per-ISP smoothing is discarded when data is unavailable; autonomous
+quality/load weighting continues immediately. Local timestamps and future-time
+bounds prevent a stale producer from appearing fresh after a successful fetch.
+
+Worker `/status` includes `routing_automation.router_telemetry` and timestamped
+`last_isp_allocations`. Metrics expose collector freshness and last selection
+weights/factors/timestamps. These are last-decision operands, not byte-fairness
+or current capacity claims. Traffic-map decision details show automatic ISP/IP
+weights, WAN utilization/factor, sample time and autonomous fallback. Existing
+configured-weight metrics remain configuration metadata. Separate remote
+collector ingress, full router settings UI and dashboards are not added here.
 
 ## Acceptance and recovery
 
@@ -185,7 +209,9 @@ Rollback stops only this optional Compose project, revokes its dedicated user,
 removes its group after checking membership, and restores recorded API-SSL
 settings if nobody else has adopted the service. Keep all existing plain API,
 WAN, queue, NAT and worker configuration unchanged. No application database or
-runtime rollback is needed because the routing consumer is not yet connected.
+runtime rollback is needed when removing only the optional collector/consumer. Reverting the scheduling
+implementation also requires restoring the previous worker/control/UI images
+and the captured deployment settings.
 
 Sources: [RouterOS API](https://manual.mikrotik.com/docs/developer-guides/api/),
 [RouterOS user permissions](https://help.mikrotik.com/docs/spaces/ROS/pages/8978504/User),

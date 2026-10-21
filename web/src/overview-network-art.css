@@ -1,0 +1,355 @@
+/* Existing network-art styles own geometry and responsive visibility. */
+.rw-ov-art {
+  isolation: isolate;
+  pointer-events: none;
+}
+.rw-ov-halo {
+  position: absolute;
+  inset: -8px;
+  border-radius: 30px;
+  border: 1px solid #c7afff55;
+  opacity: 0;
+  pointer-events: none;
+}
+.rw-ov-traveler {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.rw-ov-packet {
+  border-radius: 50%;
+  position: absolute;
+  left: 0;
+  top: 0;
+  offset-path: path("M 283 44 A 150 70 -35 1 1 37 216 A 150 70 -35 1 1 283 44");
+  offset-distance: 0%;
+  opacity: 0;
+}
+.rw-ov-signal-arc {
+  position: absolute;
+  inset: 0;
+  width: 320px;
+  height: 260px;
+  pointer-events: none;
+  opacity: 0;
+}
+.rw-ov-signal-arc path {
+  fill: none;
+  stroke: #d5bbff;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 8 92;
+}
+.rw-ov-art .rw-ov-packet {
+  width: 6px;
+  height: 6px;
+  background: #f3eaff;
+  box-shadow:
+    0 0 7px #e4ceff99,
+    0 0 16px #b998ed55;
+  animation: rw-ov-comet 12s cubic-bezier(0.35, 0, 0.65, 1) infinite;
+}
+.rw-ov-art .rw-ov-packet.rw-ov-tail-one {
+  width: 4px;
+  height: 4px;
+  background: #d6bdff;
+  box-shadow: none;
+  animation-delay: 0.11s;
+}
+.rw-ov-art .rw-ov-packet.rw-ov-tail-two {
+  width: 3px;
+  height: 3px;
+  background: #b994eb;
+  box-shadow: none;
+  animation-delay: 0.22s;
+}
+.rw-ov-art .rw-ov-packet.rw-ov-tail-three {
+  width: 2px;
+  height: 2px;
+  background: #9b79cb;
+  box-shadow: none;
+  animation-delay: 0.33s;
+}
+.rw-ov-art .rw-ov-signal-arc {
+  animation: rw-ov-arcLight 12s ease-in-out infinite;
+}
+.rw-ov-art .rw-ov-halo {
+  animation: rw-ov-emission 12s ease-out infinite;
+}
+.rw-ov-art .rw-ov-center::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border: 1px solid #c7afff66;
+  border-radius: 30px;
+  opacity: 0;
+  animation: rw-ov-emission 12s 1s ease-out infinite;
+  pointer-events: none;
+}
+.rw-ov-art .rw-ov-center svg {
+  animation: rw-ov-coreBeat 12s ease-in-out infinite;
+}
+.rw-ov-art .rw-ov-node::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px solid #ead9ff;
+  border-radius: inherit;
+  background: #d9baff22;
+  opacity: 0;
+  animation: rw-ov-reply 12s ease-out infinite;
+  pointer-events: none;
+}
+.rw-ov-art .rw-ov-node.rw-ov-node-a::after {
+  animation-delay: 1.8s;
+}
+.rw-ov-art .rw-ov-node.rw-ov-node-b::after {
+  animation-delay: 4s;
+}
+.rw-ov-art .rw-ov-node.rw-ov-node-c::after {
+  animation-delay: 6.4s;
+}
+@keyframes rw-ov-comet {
+  0% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  4% {
+    opacity: 0.95;
+  }
+  61% {
+    opacity: 0.95;
+  }
+  69%,
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+@keyframes rw-ov-arcLight {
+  0%,
+  76%,
+  100% {
+    opacity: 0;
+  }
+  10%,
+  55% {
+    opacity: 0.55;
+  }
+}
+@keyframes rw-ov-emission {
+  0% {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  5% {
+    opacity: 0.7;
+  }
+  24%,
+  100% {
+    opacity: 0;
+    transform: scale(1.35);
+  }
+}
+@keyframes rw-ov-coreBeat {
+  0%,
+  24%,
+  58%,
+  85%,
+  100% {
+    transform: scale(1);
+  }
+  8%,
+  69% {
+    transform: scale(1.065);
+  }
+}
+@keyframes rw-ov-reply {
+  0%,
+  15%,
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  3% {
+    opacity: 0.85;
+    transform: scale(1.03);
+  }
+  12% {
+    opacity: 0;
+    transform: scale(1.13);
+  }
+}
+/* One ingress, one stable hub, growing fan-out. Decorative, not a capacity claim. */
+.rw-ov-scale-map {
+  display: none;
+  position: absolute;
+  inset: 0;
+  width: 320px;
+  height: 260px;
+  pointer-events: none;
+  fill: none;
+  stroke: #c7afff;
+  stroke-width: 1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.rw-ov-art .rw-ov-scale-map {
+  display: block;
+}
+.rw-ov-scale-map .rw-ov-entry-line {
+  stroke: #eadbff;
+  stroke-width: 1.5;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  opacity: 0;
+  animation: rw-ov-oneEntry 12s ease-in-out infinite;
+}
+.rw-ov-scale-map .rw-ov-fan-out {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  opacity: 0;
+  animation: rw-ov-fanOut 12s ease-out infinite;
+}
+.rw-ov-scale-map .rw-ov-expansion {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  opacity: 0;
+  animation: rw-ov-expandRoutes 12s ease-out infinite;
+}
+.rw-ov-scale-map .rw-ov-far-points {
+  fill: #c7afff;
+  stroke: none;
+  opacity: 0;
+  transform-origin: 163px 131px;
+  animation: rw-ov-distantNodes 12s ease-out infinite;
+}
+.rw-ov-art .rw-ov-center {
+  border-color: #c7afff99;
+}
+.rw-ov-art .rw-ov-halo {
+  animation-delay: 1.4s;
+}
+.rw-ov-art .rw-ov-center::after {
+  animation-delay: 2.4s;
+}
+@keyframes rw-ov-oneEntry {
+  0% {
+    stroke-dashoffset: 100;
+    opacity: 0;
+  }
+  3% {
+    opacity: 0.75;
+  }
+  12%,
+  16% {
+    stroke-dashoffset: 0;
+    opacity: 0.75;
+  }
+  28%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+@keyframes rw-ov-fanOut {
+  0%,
+  12% {
+    stroke-dashoffset: 100;
+    opacity: 0;
+  }
+  16% {
+    opacity: 0.42;
+  }
+  32% {
+    stroke-dashoffset: 0;
+    opacity: 0.42;
+  }
+  49%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+@keyframes rw-ov-expandRoutes {
+  0%,
+  30% {
+    stroke-dashoffset: 100;
+    opacity: 0;
+  }
+  35% {
+    opacity: 0.25;
+  }
+  49% {
+    stroke-dashoffset: 0;
+    opacity: 0.25;
+  }
+  70%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+@keyframes rw-ov-distantNodes {
+  0%,
+  43% {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  51%,
+  57% {
+    opacity: 0.48;
+    transform: scale(1);
+  }
+  77%,
+  100% {
+    opacity: 0;
+    transform: scale(1.04);
+  }
+}
+/* A faint static fan-out preserves the meaning without motion. */
+.rw-ov-art[data-static="true"] .rw-ov-scale-map path {
+  stroke-dashoffset: 0;
+  opacity: 0.16;
+}
+.rw-ov-art[data-static="true"] .rw-ov-scale-map .rw-ov-far-points {
+  opacity: 0.25;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rw-ov-scale-map path {
+    stroke-dashoffset: 0 !important;
+    opacity: 0.16 !important;
+  }
+  .rw-ov-scale-map .rw-ov-far-points {
+    opacity: 0.25 !important;
+  }
+}
+
+.rw-ov-art[data-paused="true"] *,
+.rw-ov-art[data-paused="true"] *::after {
+  animation-play-state: paused !important;
+}
+.rw-ov-art[data-static="true"] *,
+.rw-ov-art[data-static="true"] *::after {
+  animation: none !important;
+}
+.rw-ov-art[data-static="true"] .rw-ov-halo,
+.rw-ov-art[data-static="true"] .rw-ov-packet,
+.rw-ov-art[data-static="true"] .rw-ov-signal-arc,
+.rw-ov-art[data-static="true"] .rw-ov-center::after,
+.rw-ov-art[data-static="true"] .rw-ov-node::after {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rw-ov-art *,
+  .rw-ov-art *::after {
+    animation: none !important;
+  }
+  .rw-ov-halo,
+  .rw-ov-packet,
+  .rw-ov-signal-arc,
+  .rw-ov-center::after,
+  .rw-ov-node::after {
+    display: none !important;
+  }
+}

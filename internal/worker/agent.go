@@ -21,6 +21,7 @@ import (
 	"proxyplatform/internal/config"
 	"proxyplatform/internal/core"
 	"proxyplatform/internal/identity"
+	"proxyplatform/internal/routertelemetry"
 	"proxyplatform/internal/store"
 	"proxyplatform/internal/topology"
 	"proxyplatform/internal/wire"
@@ -95,6 +96,17 @@ func AgentRun(ctx context.Context) error {
 		}
 	}
 	r := NewRuntime(ctx, root)
+	if endpoint := os.Getenv("ROUTER_TELEMETRY_URL"); endpoint != "" {
+		consumer, err := routertelemetry.NewConsumer(endpoint, os.Getenv("ROUTER_TELEMETRY_TOKEN_FILE"))
+		if err != nil {
+			slog.Warn("router telemetry configuration invalid; using autonomous routing")
+		} else {
+			r.mu.Lock()
+			r.routerTelemetry = consumer
+			r.mu.Unlock()
+			go consumer.Run(ctx)
+		}
+	}
 	if !a.state.ProbeDay.IsZero() {
 		r.mu.Lock()
 		r.probeWindow = a.state.ProbeDay
