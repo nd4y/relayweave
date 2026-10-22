@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,14 +32,81 @@ type rolloverTraceEvent struct {
 // Only synthetic fixture fields enter this trace: no payload/config/headers.
 // TryLock keeps observation independent of all runtime locks and traffic.
 type rolloverDiagnostics struct {
-	started time.Time
-	path    string
-	mu      sync.Mutex
-	ring    [rolloverTraceCapacity]rolloverTraceEvent
-	next    int
-	count   int
-	dropped atomic.Uint64
-	failed  atomic.Bool
+	started    time.Time
+	path       string
+	mu         sync.Mutex
+	ring       [rolloverTraceCapacity]rolloverTraceEvent
+	next       int
+	count      int
+	dropped    atomic.Uint64
+	failed     atomic.Bool
+	latestPlan atomic.Pointer[rolloverPlanDiagnostic]
+}
+
+// No route/source IDs, URLs, signatures or config are retained. Pair structs
+// contain only timestamps, eligibility and primitive numeric measurements.
+type rolloverPlanDiagnostic struct {
+	At                                time.Time
+	ElapsedNS                         int64
+	Present                           bool
+	State, Reason                     string
+	Share, Step, Success, Failed      int
+	Started, Changed, RetryAt         time.Time
+	Verdict, CachedVerdict            qualityVerdict
+	CacheValid, CacheEpochCurrent     bool
+	CacheEvaluatedAt, CacheUntil      time.Time
+	QualityPresent, Blocked, InFlight bool
+	QualityReason                     string
+	LastAttempt, LastHTTP, LastBulk   time.Time
+	PairCount                         int
+	Pairs                             []qualityPair
+}
+
+// Caller already owns runtime.mu. Copy at most eight recent pairs; no tracing,
+// JSON, I/O, cache preparation or quality-state mutation inside that lock.
+func copyRolloverPlanDiagnosticLocked(r *Runtime, p *pathRollover, now time.Time) rolloverPlanDiagnostic {
+	s := rolloverPlanDiagnostic{At: now, Present: p != nil}
+	if p == nil {
+		return s
+	}
+	s.State, s.Reason, s.Step, s.Success, s.Failed = p.state, p.reason, p.step, p.success, p.failed
+	if p.state == "canary" && p.step >= 0 && p.step < len(rolloverShares) {
+		s.Share = rolloverShares[p.step] // Configured stage share, not a measured ratio.
+	} else if p.state == "active_draining" {
+		s.Share = 100
+	}
+	s.Started, s.Changed, s.RetryAt = p.started, p.changed, p.retryAt
+	s.Verdict = r.qualityVerdictLocked(p, now) // Pure O(1) getter, including stale-cache hold.
+	s.CachedVerdict = p.qualityCache.Verdict
+	s.CacheValid, s.CacheEpochCurrent = p.qualityCache.Valid, p.qualityCache.Epoch == r.qualityEpoch
+	s.CacheEvaluatedAt, s.CacheUntil = p.qualityCache.EvaluatedAt, p.qualityCache.Until
+	if q := p.quality; q != nil {
+		s.QualityPresent, s.Blocked, s.InFlight, s.QualityReason = true, q.Blocked, q.InFlight, q.Reason
+		s.LastAttempt, s.LastHTTP, s.LastBulk = q.LastAttempt, q.LastHTTP, q.LastBulk
+		s.PairCount = len(q.Samples)
+		s.Pairs = append([]qualityPair(nil), q.Samples[max(0, len(q.Samples)-8):]...)
+	}
+	return s
+}
+
+func rolloverPlanSummary(s *rolloverPlanDiagnostic) string {
+	if s == nil {
+		return ""
+	}
+	b, _ := json.Marshal(struct {
+		State, Reason string
+		Share         int
+		Quality       qualityVerdict
+	}{s.State, s.Reason, s.Share, s.Verdict})
+	return string(b[:min(len(b), 512)])
+}
+
+// Called outside runtime.mu. The separately retained immutable snapshot survives
+// ring wrap/contention, and capture only needs this atomic pointer, not runtime.mu.
+func (d *rolloverDiagnostics) recordPlan(s rolloverPlanDiagnostic) {
+	s.ElapsedNS = s.At.Sub(d.started).Nanoseconds()
+	d.latestPlan.Store(&s)
+	d.add(rolloverTraceEvent{Stage: "native_plan", Output: rolloverPlanSummary(&s)})
 }
 
 func newRolloverDiagnostics(path string) *rolloverDiagnostics {
@@ -118,6 +186,7 @@ type rolloverDiagnosticReport struct {
 	Counters          map[string]string
 	CounterErrors     map[string]string
 	CountersElapsedNS int64
+	LatestPlan        *rolloverPlanDiagnostic `json:",omitempty"`
 }
 
 // Capture starts BEFORE test cancellation. A blocked diagnostic filesystem may
@@ -128,9 +197,13 @@ func (d *rolloverDiagnostics) capture(err error, state rolloverTraceEvent) error
 		return nil
 	}
 	events, available := d.snapshot()
+	latestPlan := d.latestPlan.Load()
 	state.ElapsedNS = time.Since(d.started).Nanoseconds()
 	state.Error = rolloverDiagnosticError(err)
-	report := rolloverDiagnosticReport{FailureElapsedNS: state.ElapsedNS, Failure: state.Error, FailureState: state, Events: events, TraceAvailable: available, Dropped: d.dropped.Load()}
+	if state.Output == "" {
+		state.Output = rolloverPlanSummary(latestPlan)
+	}
+	report := rolloverDiagnosticReport{FailureElapsedNS: state.ElapsedNS, Failure: state.Error, FailureState: state, Events: events, TraceAvailable: available, Dropped: d.dropped.Load(), LatestPlan: latestPlan}
 	done := make(chan error, 1)
 	go func() {
 		report.Counters, report.CounterErrors = rolloverDiagnosticCounters()
@@ -270,5 +343,36 @@ func TestRolloverUpstreamWriterBoundedAndNonblocking(t *testing.T) {
 	}
 	if events[0].PID != 123 || events[0].Stage != "upstream_stderr" || events[0].Output != string(payload[len(payload)-512:]) || events[0].Bytes != len(payload) {
 		t.Fatal("unbounded or incorrectly attributed output", events[0])
+	}
+}
+
+func TestRolloverDiagnosticsSuccessDumpPreservesExistingEvidence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "failure.json")
+	d := newRolloverDiagnostics(path)
+	now := time.Now()
+	d.recordPlan(rolloverPlanDiagnostic{At: now, Present: true, State: "paused", Reason: "paired_bulk_regression", Pairs: []qualityPair{{At: now, Bulk: true, OldEligible: true, Old: qualityMeasurement{OK: true, Bytes: 1048576}, Next: qualityMeasurement{OK: true, Bytes: 1048576}}}})
+	if err := d.capture(fmt.Errorf("original canary deadline"), rolloverTraceEvent{Stage: "rotation_deadline"}); err != nil {
+		t.Fatal("first diagnostic dump failed", err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil || len(before) > (256<<10)+1 {
+		t.Fatal("missing or unbounded diagnostic file", len(before), err)
+	}
+	var report rolloverDiagnosticReport
+	if err := json.Unmarshal(before, &report); err != nil {
+		t.Fatal("invalid diagnostic JSON", err)
+	}
+	if report.Failure != "original canary deadline" || report.FailureState.Stage != "rotation_deadline" || report.LatestPlan == nil || report.LatestPlan.State != "paused" || len(report.LatestPlan.Pairs) != 1 || len(report.Events) != 1 {
+		t.Fatal("dump lost original failure or copied plan/pair evidence")
+	}
+	// A fresh diagnostics instance simulates another failed run using the same
+	// path. O_EXCL must refuse it without modifying a byte of prior evidence.
+	second := newRolloverDiagnostics(path)
+	if err := second.capture(fmt.Errorf("later failure"), rolloverTraceEvent{}); !os.IsExist(err) {
+		t.Fatal("existing evidence was not rejected with O_EXCL", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("prior failure evidence was changed", err)
 	}
 }

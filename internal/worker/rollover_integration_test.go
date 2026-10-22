@@ -42,6 +42,15 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 		}
 		return 0 // No original engine has been selected yet.
 	}
+	captureFailure := func(stage string, failure error) {
+		if diagnostic != nil {
+			pid := originPID()
+			diagnostic.record(stage, 0, pid, "", false, 0, failure)
+			if dumpErr := diagnostic.capture(failure, rolloverTraceEvent{Stage: stage, PID: pid}); dumpErr != nil {
+				t.Log("native diagnostics unavailable or dump exceeded 200ms; original failure follows")
+			}
+		}
+	}
 	free := func() int {
 		l, e := net.Listen("tcp", "127.0.0.1:0")
 		if e != nil {
@@ -274,6 +283,7 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 	case <-held.Ready:
 	case <-ctx.Done():
 		checkHeld()
+		captureFailure("held_start_context_timeout", ctx.Err())
 		t.Fatal(ctx.Err())
 	case <-time.After(10 * time.Second):
 		checkHeld()
@@ -330,21 +340,37 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 		a.mu.Unlock()
 		admissions := 0
 		started := time.Now()
+		var lastPlanAt time.Time
+		lastPlanState, lastPlanReason := "", ""
 		for {
 			if time.Since(started) > 210*time.Second {
+				captureFailure("rotation_deadline", fmt.Errorf("one rotation exceeded bounded native deadline"))
 				t.Fatal("one rotation exceeded bounded native deadline")
 			}
 			select {
 			case <-ctx.Done():
 				checkHeld()
+				captureFailure("canary_context_timeout", ctx.Err())
 				t.Fatal("canary deadline", ctx.Err())
 			default:
 			}
+			var planSample *rolloverPlanDiagnostic
 			r.mu.Lock()
 			r.rebuildLocked()
 			plan := r.rollovers["profile"]
 			state := plan.state
+			if diagnostic != nil {
+				now := time.Now()
+				if now.Sub(lastPlanAt) >= time.Second || state != lastPlanState || plan.reason != lastPlanReason {
+					copy := copyRolloverPlanDiagnosticLocked(r, plan, now)
+					planSample = &copy
+					lastPlanAt, lastPlanState, lastPlanReason = now, state, plan.reason
+				}
+			}
 			r.mu.Unlock()
+			if planSample != nil {
+				diagnostic.recordPlan(*planSample)
+			}
 			if r.rolloverDirty.Load() {
 				a.mu.Lock()
 				e := a.saveLocked()
@@ -406,6 +432,7 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 	rotate(1)
 	for soak > 0 && time.Since(heldSince) < soak {
 		if ctx.Err() != nil {
+			captureFailure("soak_context_timeout", ctx.Err())
 			t.Fatal("soak deadline", ctx.Err())
 		}
 		checkHeld()
@@ -416,6 +443,7 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 		select {
 		case <-ctx.Done():
 			checkHeld()
+			captureFailure("soak_context_timeout", ctx.Err())
 			t.Fatal(ctx.Err())
 		case <-time.After(time.Second):
 		}
