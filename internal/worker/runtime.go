@@ -1009,6 +1009,10 @@ func (v *Route) scoreObserved(mode string, evidence *topology.Candidate) float64
 		}
 		if usedSpeed > 0 {
 			factor := "measured_capacity"
+			if source == "historical_capacity_prior" {
+				factor = "historical_capacity_prior"
+				evidence.Factors = append(evidence.Factors, "measurement_stale")
+			}
 			if source == "delivered_lower_bound" {
 				factor = "passive_lower_bound_used"
 			}

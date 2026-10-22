@@ -32,14 +32,14 @@ func TestScoreEvidenceContainsActualOperandsAndSurvivesMetricChanges(t *testing.
 	route.LastSpeed.Store(time.Now().Add(-time.Hour).Unix())
 	evidence = topology.Candidate{}
 	route.scoreObserved("throughput", &evidence)
-	if evidence.SpeedUsedBPS != 0 {
-		t.Fatal("stale probe used")
+	if evidence.SpeedUsedBPS != 12500000 || evidence.SpeedBPS != 0 || evidence.SpeedSource != "historical_capacity_prior" {
+		t.Fatal("historical evidence mislabeled or exceeded unknown prior", evidence)
 	}
 	route.LastPassive.Store(time.Now().Unix())
-	route.PassiveBPS.Store(5000000)
+	route.PassiveBPS.Store(25000000)
 	evidence = topology.Candidate{}
 	route.scoreObserved("auto", &evidence)
-	if evidence.SpeedSource != "delivered_lower_bound" || evidence.SpeedUsedBPS != 5000000 {
+	if evidence.SpeedSource != "delivered_lower_bound" || evidence.SpeedUsedBPS != 25000000 {
 		t.Fatal("passive lower bound lost")
 	}
 }

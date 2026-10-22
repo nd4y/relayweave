@@ -124,3 +124,32 @@ func TestRejectRedirectAndShortBody(t *testing.T) {
 		tr.CloseIdleConnections()
 	}
 }
+
+func TestUploadLatencyUsesDownloadEndpoint(t *testing.T) {
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			if r.URL.Path != "/down" {
+				w.WriteHeader(405)
+			}
+			return
+		}
+		io.Copy(io.Discard, r.Body)
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer proxy.Close()
+	var output bytes.Buffer
+	if e := run(context.Background(), config{duration: 1200 * time.Millisecond, maxBytes: 100 << 20, chunk: 65536, parallel: 1, upload: true, allowHTTP: true, latencyURL: "http://origin.example/down"}, proxy.URL, "http://origin.example/up", &output); e != nil {
+		t.Fatal(e)
+	}
+	var summary map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
+		var row map[string]any
+		json.Unmarshal([]byte(line), &row)
+		if row["event"] == "summary" {
+			summary = row
+		}
+	}
+	if summary["latency_sample_count"].(float64) < 1 || summary["failures"].(float64) != 0 {
+		t.Fatal("upload used POST-only endpoint for latency", summary)
+	}
+}

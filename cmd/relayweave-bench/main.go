@@ -80,6 +80,7 @@ type config struct {
 	adaptive        bool
 	upload          bool
 	allowHTTP       bool
+	latencyURL      string
 }
 
 func transport(proxy string) (*http.Transport, error) {
@@ -190,7 +191,11 @@ func run(ctx context.Context, cfg config, proxy, raw string, w io.Writer) error 
 	if e != nil {
 		return e
 	}
-	pingTarget, e := endpoint(raw, 0, cfg.allowHTTP)
+	pingRaw := raw
+	if cfg.latencyURL != "" {
+		pingRaw = cfg.latencyURL
+	}
+	pingTarget, e := endpoint(pingRaw, 0, cfg.allowHTTP)
 	if e != nil {
 		return e
 	}
@@ -289,6 +294,7 @@ func run(ctx context.Context, cfg config, proxy, raw string, w io.Writer) error 
 	pings := []float64{}
 	stepPings := []float64{}
 	stepStart, stepBytes, previousRate := start, int64(0), float64(0)
+	latencyLimit := float64(0)
 	growing := cfg.adaptive
 	for ctx.Err() == nil {
 		select {
@@ -308,7 +314,15 @@ func run(ctx context.Context, cfg config, proxy, raw string, w io.Writer) error 
 			}
 			if growing && now.Sub(stepStart) >= 30*time.Second {
 				stepRate := float64(total-stepBytes) * 8 / now.Sub(stepStart).Seconds() / 1e6
-				next, keepGrowing := nextParallel(int(parallel.Load()), previousRate, stepRate, quantile(stepPings, .95))
+				p95 := quantile(stepPings, .95)
+				if latencyLimit == 0 && p95 > 0 {
+					latencyLimit = p95 + math.Max(.05, p95*.25)
+				}
+				normalizedLatency := float64(0)
+				if latencyLimit > 0 {
+					normalizedLatency = .2 * p95 / latencyLimit
+				}
+				next, keepGrowing := nextParallel(int(parallel.Load()), previousRate, stepRate, normalizedLatency)
 				parallel.Store(int64(next))
 				growing = keepGrowing
 				previousRate = stepRate
@@ -333,7 +347,7 @@ func run(ctx context.Context, cfg config, proxy, raw string, w io.Writer) error 
 	if elapsed < cfg.duration.Seconds()-.1 && reason != "byte_cap" {
 		reason = "cancelled"
 	}
-	summary := map[string]any{"event": "summary", "seconds": elapsed, "stop_reason": reason, "payload_bytes": out.payload.Load(), "valid_bytes": out.valid.Load(), "reserved_application_bytes": budget.used.Load(), "completed": out.completed.Load(), "failures": out.failed.Load(), "average_mbps": float64(out.payload.Load()) * 8 / elapsed / 1e6, "ten_second_p05_mbps": quantile(windows, .05), "ten_second_median_mbps": quantile(windows, .5), "latency_p50_seconds": quantile(pings, .5), "latency_p95_seconds": quantile(pings, .95), "latency_p99_seconds": quantile(pings, .99), "final_parallel": parallel.Load()}
+	summary := map[string]any{"event": "summary", "seconds": elapsed, "stop_reason": reason, "payload_bytes": out.payload.Load(), "valid_bytes": out.valid.Load(), "reserved_application_bytes": budget.used.Load(), "completed": out.completed.Load(), "failures": out.failed.Load(), "average_mbps": float64(out.valid.Load()) * 8 / elapsed / 1e6, "average_payload_mbps": float64(out.payload.Load()) * 8 / elapsed / 1e6, "ten_second_p05_payload_mbps": quantile(windows, .05), "ten_second_median_payload_mbps": quantile(windows, .5), "latency_p50_seconds": quantile(pings, .5), "latency_p95_seconds": quantile(pings, .95), "latency_p99_seconds": quantile(pings, .99), "latency_sample_count": len(pings), "final_parallel": parallel.Load()}
 	if e != nil {
 		return e
 	}
@@ -357,6 +371,7 @@ func main() {
 	flag.BoolVar(&cfg.allowHTTP, "allow-http", false, "allow explicit isolated test HTTP origin")
 	flag.Parse()
 	raw := os.Getenv("RELAYWEAVE_BENCH_DOWNLOAD_URL")
+	cfg.latencyURL = raw
 	if cfg.upload {
 		raw = os.Getenv("RELAYWEAVE_BENCH_UPLOAD_URL")
 	}

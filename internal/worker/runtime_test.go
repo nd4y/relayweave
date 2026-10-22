@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"proxyplatform/internal/config"
 	"proxyplatform/internal/core"
+	"proxyplatform/internal/topology"
 	"testing"
 	"time"
 )
@@ -78,16 +79,22 @@ func TestCircuitAndEWMA(t *testing.T) {
 		t.Fatal("load ignored")
 	}
 }
-func TestStaleCapacityIgnored(t *testing.T) {
+func TestStaleCapacityIsOnlyCautiousPriorAndEventuallyExpires(t *testing.T) {
 	r := readyRoute("x")
 	base := r.score("throughput")
 	r.SpeedBPS.Store(100000000)
 	r.LastSpeed.Store(time.Now().Add(-time.Hour).Unix())
+	var e topology.Candidate
+	historical := r.scoreObserved("throughput", &e)
+	if e.SpeedBPS != 0 || e.SpeedUsedBPS != 12500000 || e.SpeedSource != "historical_capacity_prior" {
+		t.Fatal("stale result presented as a fresh measurement", e)
+	}
+	r.LastSpeed.Store(time.Now().Add(-25 * time.Hour).Unix())
 	if r.score("throughput") != base {
-		t.Fatal("stale sample used")
+		t.Fatal("expired historical prior retained indefinitely")
 	}
 	r.LastSpeed.Store(time.Now().Unix())
-	if r.score("throughput") >= base {
+	if r.score("throughput") >= historical {
 		t.Fatal("fresh capacity ignored")
 	}
 }

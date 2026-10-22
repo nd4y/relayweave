@@ -42,7 +42,8 @@ func (w *deliveryWindow) observe(down, up int64, now time.Time) {
 // A small idle cost preserves headroom for a tunnel that resumes transferring.
 func (r *Route) workload(now time.Time) float64 {
 	active := max(int64(0), r.Active.Load())
-	if age := now.Unix() - r.WorkloadAt.Load(); r.WorkloadAt.Load() == 0 || age < 0 || age > 3 {
+	at := r.WorkloadAt.Load()
+	if age := now.Unix() - at; at == 0 || age < 0 || age > 3 {
 		return float64(active)
 	}
 	idle := min(active, max(int64(0), r.IdleTCP.Load()))
