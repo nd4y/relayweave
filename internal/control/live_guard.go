@@ -15,8 +15,9 @@ import (
 
 func livePermits(now time.Time, sources []store.Object, profiles map[string]catalog.Profile) (map[string]config.RoutePermit, error) {
 	type sourcePermit struct {
-		until   time.Time
-		matcher catalog.Matcher
+		serverPolicy string
+		until        time.Time
+		matcher      catalog.Matcher
 	}
 	allowed := map[string]sourcePermit{}
 	for _, o := range sources {
@@ -32,16 +33,26 @@ func livePermits(now time.Time, sources []store.Object, profiles map[string]cata
 			(s.Quota["total"] > 0 && s.Quota["upload"]+s.Quota["download"] >= s.Quota["total"]) {
 			continue
 		}
-		allowed[o.ID] = sourcePermit{until: until, matcher: s.Filter.Compile()}
+		allowed[o.ID] = sourcePermit{until: until, matcher: s.Filter.Compile(), serverPolicy: config.ServerPolicyDigest(true, len(s.ProxyAllowCIDRs) > 0, s.ProxyAllowCIDRs)}
 	}
 	out := map[string]config.RoutePermit{}
 	for id, p := range profiles {
 		s, ok := allowed[p.SourceID]
-		if !ok || !p.Present || !p.Enabled || !p.Supported {
+		if !ok || (!p.Present && !now.Before(p.RetiredUntil)) || !p.Enabled || !p.Supported {
 			continue
 		}
 		if match, _ := s.matcher.Match(id, p); match {
-			out[id] = config.RoutePermit{Fingerprint: p.Fingerprint, ValidUntil: s.until}
+			until := s.until
+			if !p.FrozenUntil.IsZero() && p.FrozenUntil.Before(until) {
+				until = p.FrozenUntil
+			}
+			if !p.Present && p.RetiredUntil.Before(until) {
+				until = p.RetiredUntil
+			}
+			if !now.Before(until) {
+				continue
+			}
+			out[id] = config.RoutePermit{ServerPolicyDigest: s.serverPolicy, EstablishedOnly: !p.Present, Fingerprint: p.Fingerprint, ValidUntil: until, Previous: append([]config.RevisionPermit(nil), p.Previous...)}
 		}
 	}
 	return out, nil

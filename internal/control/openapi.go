@@ -60,9 +60,9 @@ func OpenAPI() map[string]any {
 		schemas[name] = schemaOf(reflect.TypeOf(value))
 	}
 	for name, fields := range map[string]string{
-		"Source":    "url headers enabled interval_seconds max_stale_seconds allow_private core_version filter",
-		"Aggregate": "source_ids prefix_names dedupe", "Pool": "aggregate_id source_ids profile_ids filter enabled",
-		"Profile": "enabled core_version", "Policy": "mode pool_id active_paths warm_reserve sticky_seconds rotation_seconds probe_interval_seconds probe_url probe_scope probe_fallback_urls speed_url probe_budget_bytes max_connections connect_timeout_ms fail_closed",
+		"Source":    "url headers enabled interval_seconds max_stale_seconds allow_private core_version filter update_policy proxy_allow_cidrs",
+		"Aggregate": "source_ids prefix_names dedupe", "Pool": "aggregate_id source_ids profile_ids filter enabled automatic",
+		"Profile": "enabled core_version", "Policy": "mode pool_id active_paths warm_reserve sticky_seconds rotation_seconds probe_interval_seconds probe_url probe_scope probe_fallback_urls speed_url probe_budget_bytes max_connections connect_timeout_ms fail_closed disable_speed_probes",
 		"Listener": "protocol listen policy_id username password udp enabled allow_cidrs",
 		"Settings": "default_core udp_advertise udp_port_min udp_port_max offline_lease_seconds download_mbps upload_mbps proxy_bind",
 	} {

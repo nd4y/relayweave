@@ -64,10 +64,28 @@ func (g *Gateway) udpAssociate(l config.Listener, client net.Conn, requestedHost
 	}
 	var up core.PacketSession
 	var route *Route
+	var ticket *routeTicket
+	if g.Dynamic != nil {
+		release, err := g.Dynamic.AdmitPolicy(routeKey(l))
+		if err != nil {
+			socks.Reply(client, 4, "0.0.0.0", 0)
+			return
+		}
+		defer release()
+	}
 	candidates, decision := g.topologyCandidates(routeKey(l), l.ID, "socks5-udp")
 	for _, r := range candidates {
 		if g.Dynamic != nil && !r.Config.UDP {
 			continue
+		}
+		if g.Dynamic != nil {
+			var err error
+			ticket, err = g.Dynamic.reserveRouteCapability(routeKey(l), r, true)
+			if err != nil {
+				continue
+			}
+			r = ticket.route
+			ticket.scope = &listenerScope{Listener: l, Peer: client.RemoteAddr().String()}
 		}
 		started := time.Now()
 		c, e := r.Instance.Adapter().OpenUDP(g.ctx, r.Config.Endpoint, cfg.Timeout())
@@ -76,16 +94,20 @@ func (g *Gateway) udpAssociate(l config.Listener, client net.Conn, requestedHost
 			r.success(time.Since(started))
 			break
 		}
+		ticket.outcome(false)
+		ticket.release()
+		ticket = nil
 		r.Failures.Add(1)
 		r.failed()
-		g.topologyResult(decision, r.Config.ID, "target_connect_failed")
+		g.topologyRouteResult(decision, r, "target_connect_failed")
 	}
 	if up == nil {
 		socks.Reply(client, 4, "0.0.0.0", 0)
 		return
 	}
 	defer up.Close()
-	if g.Dynamic != nil && !g.Dynamic.RouteAllowed(routeKey(l), route.Config) {
+	defer ticket.release()
+	if ticket != nil && !ticket.allowed() {
 		socks.Reply(client, 4, "0.0.0.0", 0)
 		return
 	}
@@ -110,7 +132,7 @@ func (g *Gateway) udpAssociate(l config.Listener, client net.Conn, requestedHost
 		return
 	}
 	g.udpActive.Add(1)
-	g.topologyResult(decision, route.Config.ID, "selected_by_policy")
+	g.topologyRouteResult(decision, route, "selected_by_policy")
 	defer g.udpActive.Add(-1)
 	route.Connections.Add(1)
 	route.Active.Add(1)
@@ -140,6 +162,9 @@ func (g *Gateway) udpAssociate(l config.Listener, client net.Conn, requestedHost
 		buf := make([]byte, 65535)
 		frame := make([]byte, cfg.UDP.MaxDatagramBytes)
 		for {
+			if ticket != nil && !ticket.allowed() {
+				return
+			}
 			up.SetReadDeadline(time.Now().Add(min(time.Second, idle)))
 			packet, e := up.ReadPacket(buf)
 			if e != nil {
@@ -148,6 +173,7 @@ func (g *Gateway) udpAssociate(l config.Listener, client net.Conn, requestedHost
 				}
 				return
 			}
+			ticket.outcome(true)
 			address, err := socks.Address(packet.Host, packet.Port)
 			n := 3 + len(address) + len(packet.Payload)
 			if err != nil || n > cfg.UDP.MaxDatagramBytes {
@@ -171,6 +197,9 @@ func (g *Gateway) udpAssociate(l config.Listener, client net.Conn, requestedHost
 	}()
 	buf := make([]byte, 65535)
 	for {
+		if ticket != nil && !ticket.allowed() {
+			break
+		}
 		down.SetReadDeadline(time.Now().Add(min(time.Second, idle)))
 		n, from, e := down.ReadFromUDP(buf)
 		if e != nil {
@@ -204,7 +233,7 @@ func (g *Gateway) udpAssociate(l config.Listener, client net.Conn, requestedHost
 		packet, known := flows[flow]
 		if !known {
 			host, port, _, err := socks.ReadAddress(bytes.NewReader(buf[3:n]))
-			if err != nil || forbiddenTarget(net.JoinHostPort(host, strconv.Itoa(port))) || len(flows) >= 128 || (g.Dynamic != nil && !g.Dynamic.RouteAllowed(routeKey(l), route.Config)) {
+			if err != nil || forbiddenTarget(net.JoinHostPort(host, strconv.Itoa(port))) || len(flows) >= 128 || (ticket != nil && !ticket.allowed()) {
 				g.udpDrops.Add(1)
 				continue
 			}

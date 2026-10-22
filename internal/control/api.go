@@ -163,12 +163,32 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) > 2 {
 		action := parts[2]
+		if kind == "sources" && action == "rollovers" && r.Method == "GET" {
+			s.sourceRollovers(w, r, id)
+			return
+		}
 		if r.Method == "GET" && action == "preview" {
 			s.preview(w, r, o)
 			return
 		}
 		if r.Method == "POST" && kind == "sources" && (action == "refresh" || action == "test" || action == "approve") {
-			op, e := s.enqueue(r.Context(), action, id, nil, r.Header.Get("Idempotency-Key"))
+			var payload json.RawMessage
+			if action == "approve" {
+				var body struct {
+					Pending string `json:"pending_snapshot"`
+					Version int64  `json:"source_version"`
+				}
+				if !decode(w, r, &body) {
+					return
+				}
+				source, _ := catalog.Decode[catalog.Source](o.Data)
+				if body.Version != o.Version || body.Pending == "" || body.Pending != source.PendingSnapshot {
+					fail(w, 409, "review_snapshot_changed")
+					return
+				}
+				payload, _ = json.Marshal(body)
+			}
+			op, e := s.enqueue(r.Context(), action, id, payload, r.Header.Get("Idempotency-Key"))
 			if e != nil {
 				fail(w, 503, "operation_enqueue_failed")
 				return
@@ -331,11 +351,11 @@ func (s *Server) validate(kind string, patch json.RawMessage, old *store.Object)
 		var defaults any
 		switch kind {
 		case "sources":
-			defaults = catalog.Source{Enabled: true, IntervalSeconds: 3600, MaxStaleSeconds: 259200, CoreVersion: "26.10.17", Headers: map[string]string{}}
+			defaults = catalog.Source{UpdatePolicy: "auto_safe", Enabled: true, IntervalSeconds: 3600, MaxStaleSeconds: 259200, CoreVersion: "26.10.17", Headers: map[string]string{}}
 		case "aggregates":
 			defaults = catalog.Aggregate{Dedupe: true}
 		case "pools":
-			defaults = catalog.Pool{Enabled: true}
+			defaults = catalog.Pool{Enabled: true, Automatic: len(in["source_ids"]) == 0 && len(in["profile_ids"]) == 0 && len(in["aggregate_id"]) == 0}
 		case "policies":
 			p := catalog.Policy{}
 			p.Defaults()
@@ -355,11 +375,11 @@ func (s *Server) validate(kind string, patch json.RawMessage, old *store.Object)
 	}
 	allowed := map[string]bool{}
 	fields := map[string]string{
-		"sources":    "url headers enabled interval_seconds max_stale_seconds allow_private core_version filter",
+		"sources":    "url headers enabled interval_seconds max_stale_seconds allow_private core_version filter update_policy proxy_allow_cidrs",
 		"aggregates": "source_ids prefix_names dedupe",
-		"pools":      "aggregate_id source_ids profile_ids filter enabled",
+		"pools":      "aggregate_id source_ids profile_ids filter enabled automatic",
 		"profiles":   "enabled core_version",
-		"policies":   "mode pool_id active_paths warm_reserve sticky_seconds rotation_seconds probe_interval_seconds probe_url probe_scope probe_fallback_urls speed_url probe_budget_bytes max_connections connect_timeout_ms fail_closed",
+		"policies":   "mode pool_id active_paths warm_reserve sticky_seconds rotation_seconds probe_interval_seconds probe_url probe_scope probe_fallback_urls speed_url probe_budget_bytes max_connections connect_timeout_ms fail_closed disable_speed_probes",
 		"listeners":  "protocol listen policy_id username password udp enabled allow_cidrs",
 		"settings":   "default_core udp_advertise udp_port_min udp_port_max offline_lease_seconds download_mbps upload_mbps proxy_bind egress_paths",
 	}
@@ -453,6 +473,12 @@ func (s *Server) validate(kind string, patch json.RawMessage, old *store.Object)
 	switch kind {
 	case "sources":
 		v, e := catalog.Decode[catalog.Source](b)
+		if err := config.ValidateServerCIDRs(v.ProxyAllowCIDRs); err != nil {
+			return nil, errCode("proxy_cidr_invalid")
+		}
+		if v.UpdatePolicy != "" && v.UpdatePolicy != "auto_safe" && v.UpdatePolicy != "review_only" {
+			return nil, errCode("source_update_policy_invalid")
+		}
 		u, ue := url.Parse(v.URL)
 		if e != nil || ue != nil || u.Hostname() == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || len(v.Headers) > 32 || (v.IntervalSeconds != 0 && (v.IntervalSeconds < 60 || v.IntervalSeconds > 86400)) || v.MaxStaleSeconds < 60 || v.MaxStaleSeconds > 2592000 {
 			return nil, errCode("source_settings_invalid")

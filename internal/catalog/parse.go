@@ -17,9 +17,10 @@ import (
 )
 
 type Parsed struct {
-	Format   string    `json:"format"`
-	Profiles []Profile `json:"profiles"`
-	Warnings []string  `json:"warnings"`
+	InvalidEntries int       `json:"invalid_entries,omitempty"`
+	Format         string    `json:"format"`
+	Profiles       []Profile `json:"profiles"`
+	Warnings       []string  `json:"warnings"`
 }
 
 func unbase64(s string) ([]byte, error) {
@@ -77,6 +78,7 @@ func Parse(body []byte) (Parsed, error) {
 				}
 				p, e := parseURI(line)
 				if e != nil {
+					result.InvalidEntries++
 					result.Warnings = append(result.Warnings, "unsupported_or_invalid_entry")
 					continue
 				}

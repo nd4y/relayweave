@@ -19,6 +19,9 @@ healthy paths, preferring distinct server IPs over a shared upstream balancer.
 - Built-in Xray26.10.17, additional approved versions/builds downloaded on demand;
   engine versions can coexist. Other engines can be added through the adapter interface.
 - Health checks, bounded retries/backoff, last-good recovery and draining of existing sessions.
+- [Automatic subscription rollover](docs/subscription-rollover.md): verify new
+  addresses, gradually shift new admissions and retain authorized TCP/UDP sessions
+  on their original Xray process. Credential/TLS changes remain subject to review.
 - IP-diversity preference: overlapping observed server-IP sets form a shared group.
 - [Optional router telemetry](docs/router-integrations.md): vendor-neutral module
   contract and read-only MikroTik API-SSL collector feeding optional adaptive

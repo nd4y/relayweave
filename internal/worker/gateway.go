@@ -27,6 +27,14 @@ import (
 )
 
 type Route struct {
+	TrafficDownBPS      atomic.Int64
+	TrafficUpBPS        atomic.Int64
+	TrafficAt           atomic.Int64
+	UDPHealthy          atomic.Bool
+	UDPAttempt          atomic.Int64
+	UDPChecked          atomic.Int64
+	UDPChecks           atomic.Int64
+	References          atomic.Int64
 	Config              config.Route
 	Instance            *core.Instance
 	Connections         atomic.Int64
@@ -189,7 +197,7 @@ func (g *Gateway) dialObserved(ctx context.Context, pin, target, listener, proto
 	candidates, decision := g.topologyCandidates(pin, listener, protocol)
 	for _, r := range candidates {
 		if g.targetCooling(target, r.Config.ID) {
-			g.topologyResult(decision, r.Config.ID, "target_cooldown")
+			g.topologyRouteResult(decision, r, "target_cooldown")
 			continue
 		}
 		if attempts >= 3 {
@@ -197,11 +205,24 @@ func (g *Gateway) dialObserved(ctx context.Context, pin, target, listener, proto
 		}
 		attempts++
 		g.connects.attempts.Add(1)
+		var ticket *routeTicket
+		if g.Dynamic != nil {
+			var err error
+			ticket, err = g.Dynamic.reserveRoute(pin, r)
+			if err != nil {
+				continue
+			}
+			r = ticket.route
+			if scope, ok := ctx.Value(listenerScopeKey{}).(listenerScope); ok {
+				ticket.scope = &scope
+			}
+		}
 		started := time.Now()
 		c, e := r.Instance.Adapter().OpenTCP(ctx, r.Config.Endpoint, target, g.configuration().Timeout())
 		if e == nil {
-			if g.Dynamic != nil && !g.Dynamic.RouteAllowed(pin, r.Config) {
+			if ticket != nil && !ticket.allowed() {
 				c.Close()
+				ticket.release()
 				continue
 			}
 			r.Connections.Add(1)
@@ -209,6 +230,7 @@ func (g *Gateway) dialObserved(ctx context.Context, pin, target, listener, proto
 			if tcp, ok := c.(*net.TCPConn); ok {
 				r.Active.Add(1)
 				tracked := &routeConn{TCPConn: tcp, route: r, gateway: g, release: release}
+				tracked.ticket = ticket
 				if g.Topology != nil {
 					tracked.topologyGeneration = g.configuration().Generation
 					tracked.topologyEngine = r.Config.Core
@@ -230,10 +252,19 @@ func (g *Gateway) dialObserved(ctx context.Context, pin, target, listener, proto
 				c = tracked
 				committed = true
 			}
-			g.topologyResult(decision, r.Config.ID, "selected_by_policy")
+			if !committed && ticket != nil {
+				c.Close()
+				ticket.release()
+				continue
+			}
+			g.topologyRouteResult(decision, r, "selected_by_policy")
 			return c, r, nil
 		}
 		// Xray can reject the upstream before its private SOCKS handshake
+		if ticket != nil {
+			ticket.outcome(false)
+			ticket.release()
+		}
 		// succeeds, so no tracked tunnel exists to observe a later EOF.
 		// Confirm the proxy independently; the destination may be at fault.
 		r.Instance.RequestHealthCheck()
@@ -246,7 +277,7 @@ func (g *Gateway) dialObserved(ctx context.Context, pin, target, listener, proto
 			r.failed()
 		}
 		last = e
-		g.topologyResult(decision, r.Config.ID, "target_connect_failed")
+		g.topologyRouteResult(decision, r, "target_connect_failed")
 	}
 	if attempts == 0 {
 		reason := "insufficient_observation"
@@ -527,7 +558,7 @@ func (g *Gateway) handleSOCKS(l config.Listener, c net.Conn) {
 			socks.Reply(c, 1, "0.0.0.0", 0)
 			return
 		}
-		up, r, e := g.dialObserved(g.ctx, routeKey(l), net.JoinHostPort(host, strconv.Itoa(port)), l.ID, "socks5-tcp")
+		up, r, e := g.dialObserved(scopedContext(g.ctx, l, c.RemoteAddr().String()), routeKey(l), net.JoinHostPort(host, strconv.Itoa(port)), l.ID, "socks5-tcp")
 		if e != nil {
 			socks.Reply(c, 4, "0.0.0.0", 0)
 			return
@@ -586,6 +617,7 @@ func stripHop(h http.Header) {
 func (g *Gateway) httpProxy(l config.Listener, tr *http.Transport, w http.ResponseWriter, r *http.Request) {
 	var allowed bool
 	l, allowed = g.effective(l, r.RemoteAddr)
+	r = r.WithContext(scopedContext(r.Context(), l, r.RemoteAddr))
 	if !allowed {
 		http.Error(w, "listener unavailable or client denied", 403)
 		return
@@ -656,7 +688,7 @@ func (g *Gateway) httpProxy(l config.Listener, tr *http.Transport, w http.Respon
 	if g.Dynamic != nil {
 		key := routeKey(l)
 		out = out.WithContext(httptrace.WithClientTrace(out.Context(), &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
-			if c, ok := info.Conn.(*routeConn); ok && !g.Dynamic.RouteAllowed(key, c.route.Config) {
+			if c, ok := info.Conn.(*routeConn); ok && (!g.Dynamic.RouteAllowed(key, c.route.Config) || (c.ticket != nil && !g.Dynamic.canReuse(c.ticket))) {
 				c.Close()
 			}
 		}}))

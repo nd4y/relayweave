@@ -45,6 +45,7 @@ func hashedAuth(l config.Listener, user, pass string) bool {
 	authCache.Unlock()
 	return true
 }
+
 var metadataIPv6 = net.ParseIP("fd00:ec2::254")
 
 func forbiddenTarget(target string) bool {
