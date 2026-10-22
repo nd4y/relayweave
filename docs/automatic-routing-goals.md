@@ -33,6 +33,11 @@ one long transfer and many idle sessions are not equivalent load. Do not promise
 that one scalar score can maximize every objective simultaneously. Protect
 interactive traffic while using spare capacity for parallel downloads.
 
+The next-stage [sustained-throughput plan](sustained-throughput.md) defines
+client/LAN ceilings, longer observation windows, bounded bulk workloads and
+separate real-WAN acceptance. Its controller requirements are not deployment
+claims.
+
 Select and evaluate independent (profile, ISP) paths. Prefer genuinely different
 remote server IPs; subscription aliases behind a shared endpoint do not create
 extra remote capacity. Select only operator-enabled, valid local ISP paths.
