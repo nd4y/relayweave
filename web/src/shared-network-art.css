@@ -1,0 +1,110 @@
+.rw-auth-art-viewport {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  z-index: 1101;
+  pointer-events: none;
+}
+.rw-auth-art-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 320px;
+  height: 260px;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+.rw-auth-art-layer[hidden] {
+  display: none;
+}
+.rw-ov-art[data-shared="true"] {
+  position: relative;
+  inset: auto;
+  display: block;
+  opacity: 1;
+}
+.rw-art-slot {
+  pointer-events: none;
+}
+.rw-art-slot--overview {
+  position: absolute;
+  width: 320px;
+  height: 260px;
+  right: 32px;
+  top: 20px;
+}
+.login-layout.rw-login-layout {
+  grid-template-columns: minmax(0, 460px) 352px;
+  grid-template-areas: "form art";
+  justify-content: center;
+  align-content: center;
+  gap: 72px;
+}
+.rw-login-layout .login-card {
+  grid-area: form;
+}
+.rw-art-slot--login {
+  grid-area: art;
+  width: 352px;
+  height: 286px;
+}
+.rw-auth-shell {
+  animation: rw-auth-reveal 420ms ease-out both;
+}
+.rw-overview-enter {
+  animation: rw-auth-reveal 240ms ease-out;
+}
+@keyframes rw-auth-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (max-width: 1300px) and (min-width: 901px) {
+  .rw-art-slot--overview {
+    right: -70px;
+  }
+  .rw-auth-art-layer[data-destination="overview"] {
+    opacity: 0.4;
+  }
+}
+@media (max-width: 1000px) {
+  .login-layout.rw-login-layout {
+    grid-template-columns: minmax(0, 460px);
+    grid-template-areas: "art" "form";
+    gap: 12px;
+    padding: 24px;
+  }
+  .rw-art-slot--login {
+    width: 224px;
+    height: 182px;
+    justify-self: center;
+  }
+}
+@media (max-width: 900px) {
+  .hero-panel.rw-art-hero {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .rw-art-slot--overview {
+    position: relative;
+    inset: auto;
+    width: 224px;
+    height: 182px;
+    align-self: center;
+    margin-top: 16px;
+  }
+}
+@media (max-width: 480px) {
+  .rw-art-slot--login {
+    width: 192px;
+    height: 156px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rw-auth-shell {
+    animation: none;
+  }
+}

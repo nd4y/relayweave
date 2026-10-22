@@ -6,7 +6,7 @@ import ShieldRounded from "@mui/icons-material/ShieldRounded";
 import "./overview-network-art.css";
 
 // Decorative choreography only. It never represents live traffic or capacity.
-export function OverviewNetworkArt() {
+export function OverviewNetworkArt({ shared = false }: { shared?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const [paused, setPaused] = useState(true);
   const [reduced, setReduced] = useState(true);
@@ -55,6 +55,7 @@ export function OverviewNetworkArt() {
       aria-hidden="true"
       data-paused={paused}
       data-static={reduced}
+      data-shared={shared}
     >
       <div className="art-ring ring-a" />
       <div className="art-ring ring-b" />

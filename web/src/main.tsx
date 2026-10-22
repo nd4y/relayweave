@@ -92,7 +92,7 @@ import { CoreApproval } from "./core-approval";
 import { CoreCache } from "./core-cache";
 import { countRu } from "./counts";
 import { TrafficTopology } from "./topology";
-import { OverviewNetworkArt } from "./overview-network-art";
+import { SharedNetworkArt } from "./shared-network-art";
 import "./styles.css";
 
 const grafanaURL = import.meta.env.VITE_GRAFANA_URL?.trim() || "";
@@ -159,16 +159,22 @@ function Logo({ small = false }: { small?: boolean }) {
   );
 }
 function Login({ onLogin }: { onLogin: () => void }) {
+  const card = useRef<HTMLDivElement>(null);
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   return (
-    <Box className="login-layout">
+    <Box className="login-layout rw-login-layout">
       <Box className="login-orbit orbit-one" />
       <Box className="login-orbit orbit-two" />
+      <div
+        className="rw-art-slot rw-art-slot--login"
+        data-network-art-anchor="login"
+        aria-hidden="true"
+      />
       <Fade in timeout={500}>
-        <Paper className="login-card" elevation={0}>
+        <Paper ref={card} className="login-card" elevation={0}>
           <Logo />
           <Box mt={5} mb={3}>
             <Chip
@@ -192,6 +198,17 @@ function Login({ onLogin }: { onLogin: () => void }) {
               setError("");
               try {
                 await api("auth/login", "POST", { password });
+                if (
+                  card.current &&
+                  !document.hidden &&
+                  !matchMedia("(prefers-reduced-motion: reduce)").matches
+                ) {
+                  const exit = card.current.animate(
+                    [{ opacity: 1 }, { opacity: 0 }],
+                    { duration: 160, fill: "forwards" },
+                  );
+                  await exit.finished.catch(() => {});
+                }
                 onLogin();
               } catch (e) {
                 setError(message(e));
@@ -782,14 +799,28 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
+      <SharedNetworkArt
+        destination={
+          auth === false
+            ? "login"
+            : auth && page === "overview" && !(error && !overview)
+              ? "overview"
+              : null
+        }
+      />
       {auth === null ? (
         <Box className="center-screen">
           <CircularProgress />
         </Box>
       ) : !auth ? (
-        <Login onLogin={() => setAuth(true)} />
+        <Login
+          onLogin={() => {
+            navigate("overview");
+            setAuth(true);
+          }}
+        />
       ) : (
-        <Box sx={{ display: "flex", minHeight: "100vh" }}>
+        <Box className="rw-auth-shell" sx={{ display: "flex", minHeight: "100vh" }}>
           <Drawer
             variant="permanent"
             sx={{
@@ -971,7 +1002,12 @@ function App() {
                   {error}
                 </Alert>
               )}
-              <Box key={page} className="page-enter">
+              <Box
+                key={page}
+                className={
+                  page === "overview" ? "rw-overview-enter" : "page-enter"
+                }
+              >
                 {overview?.restore_pending && (
                   <Alert severity="info" sx={{ mb: 3 }}>
                     Резервная копия восстановлена в настройки. Проверьте план и
@@ -983,7 +1019,7 @@ function App() {
                 {page === "connections" && <ClientAccess />}
                 {page === "overview" && overview && (
                   <>
-                    <Box className="hero-panel">
+                    <Box className="hero-panel rw-art-hero">
                       <Box sx={{ maxWidth: 660 }}>
                         <Chip
                           icon={<AutoAwesomeRounded />}
@@ -1033,7 +1069,11 @@ function App() {
                           )}
                         </Stack>
                       </Box>
-                      <OverviewNetworkArt />
+                      <div
+                        className="rw-art-slot rw-art-slot--overview"
+                        data-network-art-anchor="overview"
+                        aria-hidden="true"
+                      />
                     </Box>
                     <Box className="stat-grid" my={3}>
                       {[

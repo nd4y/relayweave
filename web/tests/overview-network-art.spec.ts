@@ -41,19 +41,11 @@ test("overview art respects motion preferences, visibility and navigation", asyn
   await page.getByRole("button", { name: "Переключить тему" }).click();
   await page.screenshot({ path: test.info().outputPath("overview-light.png") });
 
-  // Responsive hiding must stop all animations, including pseudo-element replies.
+  // Shared art now has a compact reserved place on mobile as well.
   await page.setViewportSize({ width: 768, height: 900 });
-  await expect(art).toBeHidden();
-  await expect(art).toHaveAttribute("data-paused", "true");
-  await expect
-    .poll(() =>
-      art.evaluate((el) =>
-        el
-          .getAnimations({ subtree: true })
-          .every((a) => a.playState === "paused"),
-      ),
-    )
-    .toBe(true);
+  await expect(art).toBeVisible();
+  await expect(art).toHaveAttribute("data-paused", "false");
+  expect(await art.boundingBox()).toMatchObject({ width: 224, height: 182 });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await expect(art).toHaveAttribute("data-paused", "false");
 
@@ -81,9 +73,10 @@ test("overview art respects motion preferences, visibility and navigation", asyn
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await expect(art).toHaveAttribute("data-paused", "false");
 
-  // Navigation unmounts and remounts the component, without stale observers.
+  // Navigation hides the persistent component and then resumes it.
   await page.goto("/#sources");
-  await expect(art).toHaveCount(0);
+  await expect(art).toBeHidden();
+  await expect(art).toHaveAttribute("data-paused", "true");
   await page.goto("/#overview");
   await expect(art).toHaveAttribute("data-paused", "false");
   expect(errors).toEqual([]);
