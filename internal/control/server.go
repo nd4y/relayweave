@@ -20,6 +20,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 	"proxyplatform/internal/catalog"
+	"proxyplatform/internal/compute"
 	"proxyplatform/internal/config"
 	"proxyplatform/internal/identity"
 	"proxyplatform/internal/store"
@@ -27,6 +28,7 @@ import (
 )
 
 type Server struct {
+	Compute      *compute.Controller
 	Topology     *topology.Hub
 	Store        *store.Store
 	PasswordHash []byte

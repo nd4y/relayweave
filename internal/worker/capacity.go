@@ -19,6 +19,9 @@ func (r *Route) requestCapacityProbe(since int64) {
 }
 
 func (r *Route) recordDeliveredRate(bps int64, receiveWindow uint32, now time.Time) {
+	if r.localEnabled.Load() {
+		bps = int64(r.localRate.Observe(now, float64(bps)))
+	}
 	r.PassiveBPS.Store(bps)
 	r.LastPassive.Store(now.Unix())
 	capacity := r.SpeedBPS.Load()

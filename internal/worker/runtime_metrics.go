@@ -108,7 +108,7 @@ func (r *Runtime) Status(g *Gateway) map[string]any {
 		policies = append(policies, map[string]any{"id": id, "mode": p.config.Mode, "ready_paths": paths, "catalog_size": len(p.config.Routes), "probe_budget_remaining_bytes": max(int64(0), p.config.ProbeBudgetBytes-used)})
 		policies[len(policies)-1]["probe_scope"] = p.config.ProbeScope
 	}
-	return map[string]any{"waiting_sources":r.waitingSourcesLocked(),"routing_version":2,"rollovers":r.rolloverStatusLocked(),"routing_automation": map[string]any{"profiles": "automatic_in_balanced_modes", "weights": "automatic_in_auto_and_throughput", "router_telemetry": r.routerTelemetry.Status(time.Now()), "last_isp_allocations": r.ispAllocations}, "egress_paths": r.config.EgressPaths, "architecture": runtime.GOARCH, "cores": engines, "routes": engines, "policies": policies, "catalog_size": len(r.config.Routes), "active_connections": g.active.Load(), "udp_associations": g.udpActive.Load(), "udp_drops": g.udpDrops.Load(), "udp_packets": g.udpPackets.Load(), "drained": r.drained.Load(), "lease_until": r.lease.Load(), "probe_bytes": r.probeBytes.Load(), "probe_budget_reserved_bytes": r.reservedProbeBudgetLocked(), "probe_budget_day": r.probeWindow.UTC().Truncate(24 * time.Hour).Format("2006-01-02"), "payload_bytes_up": up, "payload_bytes_down": down}
+	return map[string]any{"routing_algorithm": r.routingAlgorithm(), "compute_mode": r.computeState(), "compute_accepted": r.computeAccepted.Load(), "compute_rejected": r.computeRejected.Load(), "waiting_sources":r.waitingSourcesLocked(),"routing_version":2,"rollovers":r.rolloverStatusLocked(),"routing_automation": map[string]any{"profiles": "automatic_in_balanced_modes", "weights": "automatic_in_auto_throughput_and_fallback_isp", "router_telemetry": r.routerTelemetry.Status(time.Now()), "last_isp_allocations": r.ispAllocations}, "egress_paths": r.config.EgressPaths, "architecture": runtime.GOARCH, "cores": engines, "routes": engines, "policies": policies, "catalog_size": len(r.config.Routes), "active_connections": g.active.Load(), "udp_associations": g.udpActive.Load(), "udp_drops": g.udpDrops.Load(), "udp_packets": g.udpPackets.Load(), "drained": r.drained.Load(), "lease_until": r.lease.Load(), "probe_bytes": r.probeBytes.Load(), "probe_budget_reserved_bytes": r.reservedProbeBudgetLocked(), "probe_budget_day": r.probeWindow.UTC().Truncate(24 * time.Hour).Format("2006-01-02"), "payload_bytes_up": up, "payload_bytes_down": down}
 }
 func (r *Runtime) Metrics(output io.Writer) {
 	var buffer bytes.Buffer
@@ -147,6 +147,7 @@ func (r *Runtime) Metrics(output io.Writer) {
 		up, down := r.retiredUp.Load(), r.retiredDown.Load()
 		fmt.Fprintf(w, "proxy_engine_processes %d\nproxy_catalog_profiles %d\nproxy_offline_lease_until_seconds %d\nproxy_probe_bytes_total %d\n", len(r.entries), len(r.config.Routes), r.lease.Load(), r.probeBytes.Load())
 		fmt.Fprintf(w, "proxy_probe_budget_reserved_bytes %d\n", r.reservedProbeBudgetLocked())
+		fmt.Fprintf(w, "proxy_compute_accepted_total %d\nproxy_compute_rejected_total %d\n", r.computeAccepted.Load(), r.computeRejected.Load())
 		fmt.Fprintf(w, "proxy_worker_goroutines %d\n", runtime.NumGoroutine())
 		for _, e := range r.entries {
 			v := e.route

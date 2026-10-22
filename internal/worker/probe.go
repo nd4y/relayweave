@@ -163,6 +163,9 @@ func (a *Agent) test(ctx context.Context, command wire.Command) (any, error) {
 }
 
 func (r *Runtime) reserveProbe(now time.Time, key string, size, budget int64) bool {
+	if size <= 0 || budget <= 0 {
+		return false
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.probeWindow.IsZero() || !now.Before(r.probeWindow.UTC().Truncate(24*time.Hour).Add(24*time.Hour)) {
@@ -175,6 +178,9 @@ func (r *Runtime) reserveProbe(now time.Time, key string, size, budget int64) bo
 	ceiling := budget
 	for _, p := range r.config.Policies {
 		ceiling = max(ceiling, p.ProbeBudgetBytes)
+	}
+	if r.localV1 {
+		ceiling = min(ceiling, int64(64<<20))
 	}
 	var total int64
 	for _, n := range r.budget {

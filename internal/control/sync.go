@@ -86,6 +86,18 @@ func (s *Server) Sync(ctx context.Context, hello *wire.Hello) (*wire.Assignment,
 		return nil, status.Error(codes.Unavailable, "settings unavailable")
 	}
 	assignment := &wire.Assignment{LeaseUntil: time.Now().Add(time.Duration(settings.OfflineLeaseSeconds) * time.Second)}
+	if s.Compute != nil {
+		assignment.ComputeEpoch = s.Compute.Epoch.Load()
+		// Compute is optional; errors must not prevent security/config Sync.
+		if len(hello.ComputeSnapshots) <= 2 {
+			for _, snapshot := range hello.ComputeSnapshots {
+				if snapshot.Executor == hello.WorkerID && snapshot.Generation == hello.Generation {
+					_ = s.Compute.Submit(snapshot)
+				}
+			}
+		}
+		assignment.ComputeRecommendations = s.Compute.CachedLatest(hello.WorkerID)
+	}
 	assignment.LiveGuard, e = s.liveGuard(ctx, hello.GuardVersion)
 	if assignment.LiveGuard != nil && hello.RoutingVersion < 2 {
 		projected := assignment.LiveGuard.Legacy()

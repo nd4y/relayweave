@@ -83,6 +83,16 @@ func Open(dir string) (*Authority, error) {
 	return &Authority{Cert: cert, Key: key, PEM: ca}, e
 }
 func (a *Authority) Issue(name string, server bool, csrDER []byte) (Bundle, error) {
+	return a.issue(name, server, csrDER, 90*24*time.Hour)
+}
+
+// IssueCompute keeps the compute trust domain short-lived without changing
+// existing data-plane certificate lifetimes.
+func (a *Authority) IssueCompute(name string, server bool, csrDER []byte) (Bundle, error) {
+	return a.issue(name, server, csrDER, 7*24*time.Hour)
+}
+
+func (a *Authority) issue(name string, server bool, csrDER []byte, ttl time.Duration) (Bundle, error) {
 	var key *ecdsa.PrivateKey
 	var public any
 	if len(csrDER) > 0 {
@@ -100,7 +110,7 @@ func (a *Authority) Issue(name string, server bool, csrDER []byte) (Bundle, erro
 		public = &k.PublicKey
 	}
 	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	leaf := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: name}, NotBefore: time.Now().Add(-5 * time.Minute), NotAfter: time.Now().Add(90 * 24 * time.Hour), BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature}
+	leaf := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: name}, NotBefore: time.Now().Add(-5 * time.Minute), NotAfter: time.Now().Add(ttl), BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature}
 	if leaf.NotAfter.After(a.Cert.NotAfter) {
 		leaf.NotAfter = a.Cert.NotAfter
 	}

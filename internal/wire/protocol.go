@@ -9,6 +9,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/encoding"
+	"proxyplatform/internal/compute"
 	"proxyplatform/internal/config"
 	"proxyplatform/internal/core"
 	"proxyplatform/internal/topology"
@@ -22,6 +23,7 @@ func (Codec) Unmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
 func init()                                   { encoding.RegisterCodec(Codec{}) }
 
 type Hello struct {
+	ComputeSnapshots []compute.Snapshot `json:"compute_snapshots,omitempty"`
 	RoutingVersion int             `json:"routing_version,omitempty"`
 	Topology       *topology.Frame `json:"topology,omitempty"`
 	WorkerID       string          `json:"worker_id"`
@@ -46,14 +48,16 @@ type Result struct {
 	Error   string          `json:"error,omitempty"`
 }
 type Assignment struct {
-	Generation  int64             `json:"generation"`
-	Config      *config.Config    `json:"config,omitempty"`
-	LiveGuard   *config.LiveGuard `json:"live_guard,omitempty"`
-	Artifacts   []core.Artifact   `json:"artifacts,omitempty"`
-	LeaseUntil  time.Time         `json:"lease_until"`
-	Certificate []byte            `json:"certificate,omitempty"`
-	Message     string            `json:"message,omitempty"`
-	Commands    []Command         `json:"commands,omitempty"`
+	ComputeEpoch           int64                    `json:"compute_epoch,omitempty"`
+	ComputeRecommendations []compute.Recommendation `json:"compute_recommendations,omitempty"`
+	Generation             int64                    `json:"generation"`
+	Config                 *config.Config           `json:"config,omitempty"`
+	LiveGuard              *config.LiveGuard        `json:"live_guard,omitempty"`
+	Artifacts              []core.Artifact          `json:"artifacts,omitempty"`
+	LeaseUntil             time.Time                `json:"lease_until"`
+	Certificate            []byte                   `json:"certificate,omitempty"`
+	Message                string                   `json:"message,omitempty"`
+	Commands               []Command                `json:"commands,omitempty"`
 }
 
 // SeenVersion is a receive cursor, never a durability acknowledgement.

@@ -17,9 +17,11 @@ import (
 	"syscall"
 	"time"
 
+	"proxyplatform/internal/compute"
 	"proxyplatform/internal/config"
 	"proxyplatform/internal/core"
 	"proxyplatform/internal/routertelemetry"
+	"proxyplatform/internal/routing"
 	"proxyplatform/internal/topology"
 )
 
@@ -41,6 +43,14 @@ type probePermit struct {
 	until      time.Time
 }
 type policyState struct {
+	computePlan        routing.Plan
+	computeSnapshot    compute.Snapshot
+	computeRoutes      map[string]string
+	computeEpoch       int64
+	computeRecSequence int64
+	computeDeadline    time.Duration
+	localPlans         [2]routing.Plan
+	localAt            [2]time.Time
 	topologyFactors  map[string]string
 	topologyPrepared time.Time
 	rank             map[string]int
@@ -52,6 +62,23 @@ type policyState struct {
 	profileCredit    map[string]map[string]float64
 }
 type Runtime struct {
+	computeCache        *compute.Cache
+	computeMode         string
+	computeInstallation string
+	computeExecutor     string
+	computeEpoch        int64
+	computeLastExport   time.Time
+	computeKeyFile      string
+	computeKeyHash      [32]byte
+	computeKeyRead      time.Time
+	computeDisabled     atomic.Bool
+	computeAccepted     atomic.Int64
+	computeRejected     atomic.Int64
+	computeNoBenefit    atomic.Bool
+	computeCheapEpochs  int
+	computePolicyCursor int
+	localV1             bool
+	localColdAt         time.Time
 	restoreRollovers []rolloverRecord
 	rolloverDirty atomic.Bool
 	rollovers map[string]*pathRollover
@@ -92,10 +119,14 @@ type Runtime struct {
 func NewRuntime(ctx context.Context, roots ...string) *Runtime {
 	r := &Runtime{ctx: ctx, entries: map[string]*engineEntry{}, current: map[string]*engineEntry{}, policies: map[string]*policyState{}, valid: map[string]time.Time{}, slots: map[int]bool{}, budget: map[string]int64{}, visited: map[string]time.Time{}, probeWindow: time.Now()}
 	r.rootDir = "/data/runtime"
+	r.localV1 = os.Getenv("RELAYWEAVE_ROUTING_ALGORITHM") == "local-v1"
 	if len(roots) > 0 {
 		r.rootDir = roots[0]
 	}
 	go r.background()
+	if r.localV1 {
+		go r.localBackground()
+	}
 	return r
 }
 func (r *Runtime) Configuration() config.Config { r.mu.RLock(); defer r.mu.RUnlock(); return r.config }
@@ -293,6 +324,7 @@ func (r *Runtime) ensure(ctx context.Context, c config.Config, route config.Rout
 	}
 	e := &engineEntry{staged: true, dialIP: dialIP, route: &Route{Config: route, Instance: manager.Instances[binary.ID]}, manager: manager, cancel: cancel, key: key, started: time.Now(), used: time.Now(), slot: slot}
 	e.route.CeilingBPS = int64(c.DownloadMbps) * 125000
+	e.route.localEnabled.Store(r.localV1)
 	if path, ok := c.Egress(route.EgressID); ok {
 		e.route.CeilingBPS = int64(path.DownloadMbps) * 125000
 	}
@@ -659,12 +691,20 @@ func (r *Runtime) rebuildLocked() {
 			candidates = append(first, rest...)
 		}
 		p.best = append([]*Route(nil), candidates[:limit]...)
+		if r.localV1 && p.config.Mode == "auto" && p.localAt[0].IsZero() {
+			r.prepareLocalLocked(p, p.best, now, false)
+			r.prepareLocalLocked(p, p.best, now, true)
+		}
 	}
 }
 func (r *Runtime) Candidates(key string) []*Route {
 	return r.candidatesObserved(key, nil)
 }
 func (r *Runtime) candidatesObserved(key string, decision *topology.Decision) (result []*Route) {
+	return r.candidatesForProtocol(key, decision, false)
+}
+
+func (r *Runtime) candidatesForProtocol(key string, decision *topology.Decision, udp bool) (result []*Route) {
 	if decision != nil {
 		decision.Policy = strings.TrimPrefix(key, "policy:")
 		decision.Reason = "selected_by_policy"
@@ -737,6 +777,15 @@ func (r *Runtime) candidatesObserved(key string, decision *topology.Decision) (r
 		}
 		return nil
 	}
+	if r.localV1 && p != nil && p.config.Mode == "auto" {
+		filtered := out[:0]
+		for _, v := range out {
+			if r.localEgressAllowed(v.Config.EgressID) && (!udp || v.Config.UDP) {
+				filtered = append(filtered, v)
+			}
+		}
+		out = filtered
+	}
 	if len(out) < 2 {
 		return out
 	}
@@ -750,6 +799,9 @@ func (r *Runtime) candidatesObserved(key string, decision *topology.Decision) (r
 	}
 	if p != nil && len(r.config.EgressPaths) > 0 && mode == "fallback" {
 		return r.selectFallbackEgressLocked(p, out, decision)
+	}
+	if r.localV1 && p != nil && mode == "auto" {
+		return r.selectLocalLocked(p, out, decision, now, udp)
 	}
 	if p != nil && len(r.config.EgressPaths) > 0 && (mode == "auto" || mode == "throughput" || mode == "round-robin") {
 		return r.selectEgressLocked(p, out, decision)
@@ -863,6 +915,9 @@ func (r *Runtime) RouteAllowed(key string, v config.Route) bool {
 	defer r.mu.RUnlock()
 	until, exists := r.valid[v.ID]
 	e := r.current[v.ID]
+	if r.localV1 && !r.localEgressAllowed(v.EgressID) {
+		return false
+	}
 	return exists && e != nil && e.route.Config.Core == v.Core && fingerprint(e.route.Config) == fingerprint(v) && (until.IsZero() || time.Now().Before(until)) && r.permitted(strings.TrimPrefix(key, "policy:"), v)
 }
 func (v *Route) score(mode string) float64 {
@@ -950,6 +1005,9 @@ func (v *Route) scoreObserved(mode string, evidence *topology.Candidate) float64
 	return score
 }
 func (v *Route) success(d time.Duration) {
+	if v.localEnabled.Load() {
+		v.localStats.Observe(time.Now(), float64(d)/float64(time.Millisecond), false)
+	}
 	old := v.RTTUS.Load()
 	sample := d.Microseconds()
 	if old == 0 {
@@ -973,6 +1031,9 @@ func (v *Route) failed() {
 				break
 			}
 		}
+	}
+	if v.localEnabled.Load() {
+		v.localStats.Observe(time.Now(), 0, true)
 	}
 	n := v.ConsecutiveFailures.Add(1)
 	if n >= 3 {
@@ -1059,6 +1120,9 @@ func (r *Runtime) maintain() {
 		return
 	}
 	// Fill hot paths first, then visit a cold profile at a bounded rate.
+	if r.localV1 && time.Since(r.localColdAt) < 60*time.Second {
+		return
+	}
 	r.mu.RLock()
 	count := len(r.current)
 	r.mu.RUnlock()
@@ -1082,6 +1146,9 @@ func (r *Runtime) maintain() {
 			continue
 		}
 		r.visited[v.ID] = time.Now()
+		if r.localV1 {
+			r.localColdAt = time.Now()
+		}
 		entry, err := r.ensure(r.ctx, cfg, v)
 		if err == nil {
 			r.mu.Lock()

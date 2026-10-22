@@ -22,6 +22,7 @@ import (
 
 	"proxyplatform/internal/config"
 	"proxyplatform/internal/core"
+	"proxyplatform/internal/routing"
 	"proxyplatform/internal/socks"
 	"proxyplatform/internal/topology"
 )
@@ -36,6 +37,9 @@ type Route struct {
 	UDPChecked          atomic.Int64
 	UDPChecks           atomic.Int64
 	References          atomic.Int64
+	localStats          routing.Estimator
+	localRate           routing.RateEstimator
+	localEnabled        atomic.Bool
 	Config              config.Route
 	Instance            *core.Instance
 	Connections         atomic.Int64

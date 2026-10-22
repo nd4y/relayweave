@@ -1,0 +1,17 @@
+# Set an explicitly verified immutable image reference and provision each identity
+# separately. No media, Docker socket, CA private key or production env mounts.
+services:
+  compute-1:
+    image: ${COMPUTE_WORKER_IMAGE:?set verified image@sha256 digest}
+    command: ["-dispatcher", "${COMPUTE_DISPATCHER:?set private HTTPS URL}", "-identity-dir", "/identity"]
+    user: "65532:65532"
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 64
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    volumes: ["${COMPUTE_IDENTITY_1:?set peer identity directory}:/identity:rw"]
+    environment: {GOMAXPROCS: "1", GOMEMLIMIT: "384MiB"}
+    stop_grace_period: 7s

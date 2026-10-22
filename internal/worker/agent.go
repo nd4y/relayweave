@@ -66,6 +66,9 @@ type Agent struct {
 }
 
 func AgentRun(ctx context.Context) error {
+	if algorithm := os.Getenv("RELAYWEAVE_ROUTING_ALGORITHM"); algorithm != "" && algorithm != "legacy" && algorithm != "local-v1" {
+		return fmt.Errorf("unsupported routing algorithm")
+	}
 	dir := os.Getenv("DATA_DIR")
 	if dir == "" {
 		dir = "/data"
@@ -112,6 +115,9 @@ func AgentRun(ctx context.Context) error {
 		}
 	}
 	r.restoreRollovers = a.state.Rollovers
+	if e := r.configureCompute(id); e != nil {
+		slog.Warn("compute_configuration_unavailable; local routing continues")
+	}
 	if !a.state.ProbeDay.IsZero() {
 		r.mu.Lock()
 		r.probeWindow = a.state.ProbeDay
@@ -203,7 +209,7 @@ func AgentRun(ctx context.Context) error {
 		if pendingTopology == nil {
 			pendingTopology = r.TopologyFrame(g)
 		}
-		assignment, err := wire.Sync(call, conn, &wire.Hello{RoutingVersion: 2, Topology: pendingTopology, WorkerID: id, Generation: generation, GuardVersion: guardVersion, Status: b, Results: results, CSR: csr})
+		assignment, err := wire.Sync(call, conn, &wire.Hello{RoutingVersion: 2, Topology: pendingTopology, WorkerID: id, Generation: generation, GuardVersion: guardVersion, Status: b, Results: results, CSR: csr, ComputeSnapshots: r.ComputeSnapshots()})
 		cancel()
 		if err != nil {
 			if online {
@@ -217,6 +223,7 @@ func AgentRun(ctx context.Context) error {
 				online = true
 			}
 			r.RenewLease(assignment.LeaseUntil)
+			r.AcceptCompute(assignment.ComputeEpoch, assignment.ComputeRecommendations)
 			guardOK := true
 			if assignment.LiveGuard != nil {
 				if err := a.acceptLiveGuard(*assignment.LiveGuard); err != nil {
