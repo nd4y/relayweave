@@ -1088,6 +1088,7 @@ func (r *Runtime) maintain() {
 			for key, e := range r.entries {
 				if e.route == p.old || e.route == p.next {
 					keep[key] = true
+					e.used = time.Now()
 				}
 			}
 		}

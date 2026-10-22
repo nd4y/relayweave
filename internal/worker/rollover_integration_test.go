@@ -17,6 +17,7 @@ import (
 	"proxyplatform/internal/core"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -29,7 +30,8 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 		t.Skip("real core opt-in")
 	}
 	version := os.Getenv("XRAY_EGRESS_TEST_VERSION")
-	ctx, cancel := context.WithTimeout(context.Background(), 160*time.Second)
+	soak := rolloverSoakDuration(t)
+	ctx, cancel := context.WithTimeout(context.Background(), soak+240*time.Second)
 	defer cancel()
 	free := func() int {
 		l, e := net.Listen("tcp", "127.0.0.1:0")
@@ -55,7 +57,7 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 	if serverHost == "" {
 		t.Fatal("isolated container private address required")
 	}
-	ports := []int{free(), free()}
+	ports := []int{free(), free(), free(), free(), free()}
 	upstreams := []config.Route{}
 	for i, port := range ports {
 		upstreams = append(upstreams, config.Route{ID: strconv.Itoa(i), Endpoint: net.JoinHostPort("0.0.0.0", strconv.Itoa(port)), Outbound: json.RawMessage(`{"protocol":"freedom","settings":{}}`)})
@@ -87,7 +89,14 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 		}
 	}
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/bulk" {
+			w.Header().Set("Content-Length", "1048576")
+			io.CopyN(w, strings.NewReader(strings.Repeat("b", int(qualityBulkPayload))), qualityBulkPayload)
+			return
+		}
+		w.WriteHeader(204)
+	}))
 	defer origin.Close()
 	target := strings.Replace(origin.URL, "127.0.0.1", "origin.test", 1)
 	echo, err := net.Listen("tcp", "127.0.0.1:0")
@@ -109,6 +118,8 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer udp.Close()
+	var persistentUDPPeer atomic.Value
+	var changedUDPPeer atomic.Bool
 	go func() {
 		buf := make([]byte, 2048)
 		for {
@@ -116,8 +127,15 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 			if e != nil {
 				return
 			}
-			if n >= 12 {
+			if n == 29 && buf[2] == 1 && buf[5] == 1 {
 				buf[2] |= 0x80
+			}
+			if bytes.HasPrefix(buf[:n], []byte("persistent-udp-sequence-")) {
+				if peer := persistentUDPPeer.Load(); peer == nil {
+					persistentUDPPeer.Store(from.String())
+				} else if peer.(string) != from.String() {
+					changedUDPPeer.Store(true)
+				}
 			}
 			udp.WriteToUDP(buf[:n], from)
 		}
@@ -128,7 +146,8 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 	}
 	digest := sha256.Sum256(file)
 	r := NewRuntime(ctx, t.TempDir())
-	r.RenewLease(time.Now().Add(time.Hour))
+	horizon := time.Now().Add(soak + time.Hour)
+	r.RenewLease(horizon)
 	g := New(ctx, config.Config{}, nil)
 	g.Dynamic = r
 	defer g.Close()
@@ -136,7 +155,7 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 	makeConfig := func(index int) config.Config {
 		out, _ := json.Marshal(map[string]any{"protocol": "socks", "settings": map[string]any{"servers": []any{map[string]any{"address": serverHost, "port": ports[index]}}}})
 		fp := sha256.Sum256(out)
-		return config.Config{Managed: true, Generation: int64(index + 1), StateDir: t.TempDir(), MetricsListen: "127.0.0.1:0", ProbeURL: target, ConnectTimeoutMS: 2000, MaxConnections: 100, LeaseUntil: time.Now().Add(time.Hour), UDPProbeTargets: []string{udp.LocalAddr().String()}, Cores: []config.Core{{ID: "x", Binary: binary, Version: version, SHA256: hex.EncodeToString(digest[:])}}, Routes: []config.Route{{ID: "profile", Core: "x", Endpoint: "127.0.0.1:45000", ServerHost: serverHost, AllowPrivate: true, ServerAllowCIDRs: []string{serverHost + "/32"}, CheckServer: true, Outbound: out, Fingerprint: hex.EncodeToString(fp[:16]), ValidUntil: time.Now().Add(time.Hour), UDP: true}}, Policies: []config.Policy{{ID: "p", Mode: "auto", Routes: []string{"profile"}, ActivePaths: 1, ProbeURL: target, ProbeIntervalSeconds: 10, ProbeBudgetBytes: 1 << 20, ConnectTimeoutMS: 2000}}, Listeners: []config.Listener{{ID: "s", Protocol: "socks5", Listen: socksListen, Policy: "p", UDP: true}}, UDP: config.UDP{Bind: "127.0.0.1", Advertise: "127.0.0.1", PortMin: 36000, PortMax: 36031, IdleSeconds: 60}}
+		return config.Config{Managed: true, Generation: int64(index + 1), StateDir: t.TempDir(), MetricsListen: "127.0.0.1:0", ProbeURL: target, ConnectTimeoutMS: 2000, MaxConnections: 100, LeaseUntil: horizon, UDPProbeTargets: []string{udp.LocalAddr().String()}, Cores: []config.Core{{ID: "x", Binary: binary, Version: version, SHA256: hex.EncodeToString(digest[:])}}, Routes: []config.Route{{ID: "profile", Core: "x", Endpoint: "127.0.0.1:45000", ServerHost: serverHost, AllowPrivate: true, ServerAllowCIDRs: []string{serverHost + "/32"}, CheckServer: true, Outbound: out, Fingerprint: hex.EncodeToString(fp[:16]), ValidUntil: horizon, UDP: true}}, Policies: []config.Policy{{ID: "p", Mode: "auto", Routes: []string{"profile"}, ActivePaths: 1, ProbeURL: target, ProbeIntervalSeconds: 10, DisableSpeedProbes: true, ProbeBudgetBytes: 16 << 20, ConnectTimeoutMS: 2000}}, Listeners: []config.Listener{{ID: "s", Protocol: "socks5", Listen: socksListen, Policy: "p", UDP: true}}, UDP: config.UDP{Bind: "127.0.0.1", Advertise: "127.0.0.1", PortMin: 36000, PortMax: 36031, IdleSeconds: 60}}
 	}
 	c := makeConfig(0)
 	r.Restrict(c)
@@ -147,14 +166,20 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 	if err = a.load(); err != nil {
 		t.Fatal(err)
 	}
+	a.mu.Lock()
 	a.state.Config = &c
 	a.state.Generation = c.Generation
-	for range 3 {
-		r.current["profile"].route.UDPAttempt.Store(0)
-		a.probeUDPCapability(ctx)
-	}
-	if !udpProven(r.current["profile"].route) {
-		t.Fatal("actual UDP health not proven")
+	a.mu.Unlock()
+	loopsDone := make(chan struct{}, 2)
+	go func() { a.udpProbes(); loopsDone <- struct{}{} }()
+	go func() { a.rolloverQualityLoop(); loopsDone <- struct{}{} }()
+	defer func() { cancel(); <-loopsDone; <-loopsDone }()
+	deadline := time.Now().Add(30 * time.Second)
+	for !udpProven(r.current["profile"].route) {
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			t.Fatal("production UDP scheduler did not establish capability")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	echoTarget := "origin.test:" + strconv.Itoa(echo.Addr().(*net.TCPAddr).Port)
 	oldTCP, old, err := g.dial(ctx, "policy:p", echoTarget)
@@ -162,10 +187,12 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer oldTCP.Close()
+	var tcpSequence, udpSequence uint64
 	assertEcho := func(conn net.Conn) {
 		t.Helper()
 		conn.SetDeadline(time.Now().Add(3 * time.Second))
-		payload := []byte("persistent-sequence-payload")
+		tcpSequence++
+		payload := []byte("persistent-sequence-payload-" + strconv.FormatUint(tcpSequence, 10))
 		if _, e := conn.Write(payload); e != nil {
 			t.Fatal(e)
 		}
@@ -180,95 +207,167 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer packets.Close()
+	oldPID := old.Instance.PID.Load()
+	if oldPID == 0 {
+		t.Fatal("old engine process missing")
+	}
 	assertUDP := func() {
 		t.Helper()
 		packets.SetReadDeadline(time.Now().Add(3 * time.Second))
-		if e := packets.WritePacket(core.Packet{Host: "origin.test", Port: udp.LocalAddr().(*net.UDPAddr).Port, Payload: []byte("echo")}); e != nil {
+		udpSequence++
+		payload := []byte("persistent-udp-sequence-" + strconv.FormatUint(udpSequence, 10))
+		if e := packets.WritePacket(core.Packet{Host: "origin.test", Port: udp.LocalAddr().(*net.UDPAddr).Port, Payload: payload}); e != nil {
 			t.Fatal(e)
 		}
 		packet, e := packets.ReadPacket(make([]byte, 2048))
-		if e != nil || string(packet.Payload) != "echo" {
+		if e != nil || !bytes.Equal(packet.Payload, payload) {
 			t.Fatal("UDP association interrupted", e)
+		}
+		if changedUDPPeer.Load() {
+			t.Fatal("held UDP association changed actual origin peer mapping")
 		}
 	}
 	assertUDP()
-	nextConfig := makeConfig(1)
-	nextConfig.Routes[0].Previous = []config.RevisionPermit{{Fingerprint: c.Routes[0].Fingerprint, ValidUntil: c.Routes[0].ValidUntil}}
-	r.Restrict(nextConfig)
-	if err = r.Apply(ctx, nextConfig, g); err != nil {
-		t.Fatal(err)
-	}
-	a.state.Config = &nextConfig
-	a.state.Generation = nextConfig.Generation
-	admissions := 0
-	started := time.Now()
-	for {
-		select {
-		case <-ctx.Done():
-			t.Fatal("canary deadline", ctx.Err())
-		default:
+	heldSince := time.Now()
+	lastCheckpoint := time.Time{}
+	rotations := 0
+	checkpoint := func(final bool) {
+		if old.Instance.PID.Load() != oldPID {
+			t.Fatal("held engine process changed")
 		}
-		a.probeUDPCapability(ctx)
-		r.mu.Lock()
-		r.rebuildLocked()
-		plan := r.rollovers["profile"]
-		state := plan.state
-		r.mu.Unlock()
-		if r.rolloverDirty.Load() {
-			a.mu.Lock()
-			e := a.saveLocked()
-			a.mu.Unlock()
+		if !final && time.Since(lastCheckpoint) < time.Minute {
+			return
+		}
+		lastCheckpoint = time.Now()
+		r.mu.RLock()
+		engines := len(r.entries)
+		references := int64(0)
+		for _, entry := range r.entries {
+			references += entry.route.References.Load()
+		}
+		r.mu.RUnlock()
+		writeRolloverSoakCheckpoint(t, rolloverSoakCheckpoint{SourceSHA: os.Getenv("ROLLOVER_SOURCE_SHA"), CoreSHA: hex.EncodeToString(digest[:]), CoreVersion: version, HeldSince: heldSince, At: time.Now(), Seconds: time.Since(heldSince).Seconds(), TCPSequence: tcpSequence, UDPSequence: udpSequence, OldPID: oldPID, OldActive: old.Active.Load(), Engines: engines, References: references, Rotations: rotations, Final: final, DR1Passed: final && soak >= 24*time.Hour && time.Since(heldSince) >= 24*time.Hour})
+	}
+	rotate := func(index int) {
+		t.Helper()
+		nextConfig := makeConfig(index)
+		if os.Getenv("ROLLOVER_NATIVE_BULK") == "1" {
+			nextConfig.Policies[0].DisableSpeedProbes = false
+			nextConfig.Policies[0].SpeedURL = target + "/bulk"
+			nextConfig.Policies[0].ProbeBudgetBytes = 128 << 20
+		}
+		previousConfig := c
+		a.mu.Lock()
+		if a.state.Config != nil {
+			previousConfig = *a.state.Config
+		}
+		a.mu.Unlock()
+		nextConfig.Routes[0].Previous = []config.RevisionPermit{{Fingerprint: c.Routes[0].Fingerprint, ValidUntil: c.Routes[0].ValidUntil}}
+		if previousConfig.Routes[0].Fingerprint != c.Routes[0].Fingerprint {
+			nextConfig.Routes[0].Previous = append(nextConfig.Routes[0].Previous, config.RevisionPermit{Fingerprint: previousConfig.Routes[0].Fingerprint, ValidUntil: previousConfig.Routes[0].ValidUntil})
+		}
+		r.Restrict(nextConfig)
+		if err = r.Apply(ctx, nextConfig, g); err != nil {
+			t.Fatal(err)
+		}
+		a.mu.Lock()
+		a.state.Config = &nextConfig
+		a.state.Generation = nextConfig.Generation
+		a.mu.Unlock()
+		admissions := 0
+		started := time.Now()
+		for {
+			if time.Since(started) > 210*time.Second {
+				t.Fatal("one rotation exceeded bounded native deadline")
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatal("canary deadline", ctx.Err())
+			default:
+			}
+			r.mu.Lock()
+			r.rebuildLocked()
+			plan := r.rollovers["profile"]
+			state := plan.state
+			r.mu.Unlock()
+			if r.rolloverDirty.Load() {
+				a.mu.Lock()
+				e := a.saveLocked()
+				a.mu.Unlock()
+				if e != nil {
+					t.Fatal(e)
+				}
+			}
+			assertEcho(oldTCP)
+			assertUDP()
+			checkpoint(false)
+			if state == "active_draining" {
+				break
+			}
+			conn, route, e := g.dial(ctx, "policy:p", echoTarget)
 			if e != nil {
 				t.Fatal(e)
 			}
+			assertEcho(conn)
+			conn.Close()
+			if route.Config.Fingerprint == nextConfig.Routes[0].Fingerprint {
+				admissions++
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if admissions < 60 || time.Since(started) < 90*time.Second {
+			t.Fatal("unobserved/timer-only canary", admissions, time.Since(started))
+		}
+		for range 10 {
+			conn, route, e := g.dial(ctx, "policy:p", echoTarget)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if route.Config.Fingerprint != nextConfig.Routes[0].Fingerprint {
+				t.Fatal("old revision still admits after promotion")
+			}
+			assertEcho(conn)
+			conn.Close()
 		}
 		assertEcho(oldTCP)
 		assertUDP()
-		if state == "active_draining" {
-			break
+		fresh, err := (core.XrayAdapter{}).OpenUDP(ctx, socksListen, 2*time.Second)
+		if err != nil {
+			t.Fatal("new UDP association after promotion", err)
 		}
-		conn, route, e := g.dial(ctx, "policy:p", echoTarget)
-		if e != nil {
-			t.Fatal(e)
+		fresh.SetReadDeadline(time.Now().Add(3 * time.Second))
+		if err = fresh.WritePacket(core.Packet{Host: "origin.test", Port: udp.LocalAddr().(*net.UDPAddr).Port, Payload: []byte("new")}); err != nil {
+			t.Fatal(err)
 		}
-		assertEcho(conn)
-		conn.Close()
-		if route != old {
-			admissions++
+		packet, err := fresh.ReadPacket(make([]byte, 2048))
+		fresh.Close()
+		if err != nil || string(packet.Payload) != "new" {
+			t.Fatal("new UDP revision not working", err)
 		}
-		time.Sleep(20 * time.Millisecond)
+		if old.Active.Load() < 2 {
+			t.Fatal("old TCP/UDP not retained")
+		}
+		rotations++
+		t.Logf("native wall-clock rollover: %d successful new admissions in %s; old TCP and UDP continuous", admissions, time.Since(started))
 	}
-	if admissions < 60 || time.Since(started) < 90*time.Second {
-		t.Fatal("unobserved/timer-only canary", admissions, time.Since(started))
-	}
-	for range 10 {
-		conn, route, e := g.dial(ctx, "policy:p", echoTarget)
-		if e != nil {
-			t.Fatal(e)
+	rotate(1)
+	for soak > 0 && time.Since(heldSince) < soak {
+		if ctx.Err() != nil {
+			t.Fatal("soak deadline", ctx.Err())
 		}
-		if route == old {
-			t.Fatal("old revision still admits after promotion")
+		assertEcho(oldTCP)
+		assertUDP()
+		checkpoint(false)
+		if rotations < 4 && time.Since(heldSince) >= time.Duration(rotations)*soak/4 {
+			rotate(rotations + 1)
 		}
-		assertEcho(conn)
-		conn.Close()
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(time.Second):
+		}
 	}
 	assertEcho(oldTCP)
 	assertUDP()
-	fresh, err := (core.XrayAdapter{}).OpenUDP(ctx, socksListen, 2*time.Second)
-	if err != nil {
-		t.Fatal("new UDP association after promotion", err)
-	}
-	fresh.SetReadDeadline(time.Now().Add(3 * time.Second))
-	if err = fresh.WritePacket(core.Packet{Host: "origin.test", Port: udp.LocalAddr().(*net.UDPAddr).Port, Payload: []byte("new")}); err != nil {
-		t.Fatal(err)
-	}
-	packet, err := fresh.ReadPacket(make([]byte, 2048))
-	fresh.Close()
-	if err != nil || string(packet.Payload) != "new" {
-		t.Fatal("new UDP revision not working", err)
-	}
-	if old.Active.Load() < 2 {
-		t.Fatal("old TCP/UDP not retained")
-	}
-	t.Logf("native wall-clock rollover: %d successful new admissions in %s; old TCP and UDP continuous", admissions, time.Since(started))
+	checkpoint(true)
 }

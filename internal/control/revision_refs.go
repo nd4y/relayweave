@@ -45,7 +45,7 @@ func (s *Server) revisionReferences(ctx context.Context) (map[string]bool, bool,
 			continue
 		}
 		count++
-		if generation < pointer.Generation || time.Since(seen) > 60*time.Second || status.RoutingVersion < 2 {
+		if generation < pointer.Generation || time.Since(seen) > 60*time.Second || status.RoutingVersion < 3 {
 			all = false
 		}
 		for _, core := range status.Cores {
