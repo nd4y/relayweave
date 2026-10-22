@@ -22,6 +22,7 @@ type profileProbe struct {
 	SpeedURL  string          `json:"speed_url"`
 	PolicyID  string          `json:"policy_id"`
 	Budget    int64           `json:"budget"`
+	Automatic bool            `json:"automatic,omitempty"`
 }
 
 func (a *Agent) test(ctx context.Context, command wire.Command) (any, error) {
@@ -86,7 +87,7 @@ func (a *Agent) test(ctx context.Context, command wire.Command) (any, error) {
 		if key == "" {
 			key = "manual"
 		}
-		if !r.reserveProbe(time.Now(), key, limit, budget) {
+		if !r.reserveCapacityProbe(time.Now(), key, limit, budget, body.Automatic) {
 			return nil, fmt.Errorf("probe_budget_exhausted")
 		}
 		// Reserve on durable storage before sending a byte, including after restart.
@@ -156,6 +157,15 @@ func (a *Agent) test(ctx context.Context, command wire.Command) (any, error) {
 		e.route.LastSpeed.Store(time.Now().Unix())
 		e.route.ProbeNotBefore.Store(0)
 		e.route.ProbeRequestedAt.Store(0)
+		r.mu.Lock()
+		r.rememberCapacityLocked(e, cfg, targetURL, bps, time.Now())
+		r.mu.Unlock()
+		a.mu.Lock()
+		persistErr := a.saveLocked()
+		a.mu.Unlock()
+		if persistErr != nil {
+			return nil, fmt.Errorf("capacity_sample_persistence_failed")
+		}
 		result["mbps"] = float64(bps) * 8 / 1e6
 		result["confidence"] = "single_bounded_sample"
 	}
@@ -172,6 +182,16 @@ func (r *Runtime) reserveProbe(now time.Time, key string, size, budget int64) bo
 }
 
 func (r *Runtime) reserveProbeLocked(now time.Time, key string, size, budget int64) bool {
+	return r.reserveClassifiedProbeLocked(now, key, size, budget, false, false)
+}
+
+func (r *Runtime) reserveCapacityProbe(now time.Time, key string, size, budget int64, automatic bool) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.reserveClassifiedProbeLocked(now, key, size, budget, true, automatic)
+}
+
+func (r *Runtime) reserveClassifiedProbeLocked(now time.Time, key string, size, budget int64, capacity, automatic bool) bool {
 	if size <= 0 || budget <= 0 {
 		return false
 	}
@@ -188,17 +208,12 @@ func (r *Runtime) reserveProbeLocked(now time.Time, key string, size, budget int
 	if r.probeWindow.IsZero() || !now.Before(r.probeWindow.UTC().Truncate(24*time.Hour).Add(24*time.Hour)) {
 		r.probeWindow = now.UTC().Truncate(24 * time.Hour)
 		r.budget = map[string]int64{}
+		r.capacityBudget = map[string]int64{}
 	}
 	if r.budget == nil {
 		r.budget = map[string]int64{}
 	}
-	ceiling := budget
-	for _, p := range policies {
-		ceiling = max(ceiling, p.ProbeBudgetBytes)
-	}
-	if r.localV1 {
-		ceiling = min(ceiling, int64(64<<20))
-	}
+	ceiling := r.probeCeilingLocked(budget)
 	var total int64
 	for _, n := range r.budget {
 		total += n
@@ -206,7 +221,21 @@ func (r *Runtime) reserveProbeLocked(now time.Time, key string, size, budget int
 	if size > budget || r.budget[key] > budget-size || size > ceiling || total > ceiling-size {
 		return false
 	}
+	if capacity && automatic {
+		// Only capacity reservations consume the capacity half. Quality/UDP
+		// reservations still count against the SAME unmodified global ceiling.
+		if size > ceiling/2 || r.capacityReservedLocked(now) > ceiling/2-size {
+			return false
+		}
+	}
+	if r.capacityBudget == nil {
+		// Old journals have no purpose breakdown. Never refund their spending.
+		r.capacityBudget = cloneProbeBudget(r.budget)
+	}
 	r.budget[key] += size
+	if capacity {
+		r.capacityBudget[key] += size
+	}
 	return true
 }
 func (a *Agent) adaptiveProbes() {
@@ -245,11 +274,8 @@ func (a *Agent) adaptiveProbes() {
 				// Automatic throughput bursts may use only the first half of
 				// the shared daily budget. Preserve the other half for health.
 				a.runtime.mu.RLock()
-				reserved := a.runtime.reservedProbeBudgetLocked()
-				ceiling := p.ProbeBudgetBytes
-				for _, other := range cfg.Policies {
-					ceiling = max(ceiling, other.ProbeBudgetBytes)
-				}
+				reserved := a.runtime.capacityReservedLocked(now)
+				ceiling := a.runtime.probeCeilingLocked(p.ProbeBudgetBytes)
 				a.runtime.mu.RUnlock()
 				if reserved+(8<<20) > ceiling/2 {
 					continue
@@ -284,7 +310,7 @@ func (a *Agent) adaptiveProbes() {
 				since = time.Now().Unix()
 			}
 			previous := route.SpeedBPS.Load()
-			body, _ := json.Marshal(profileProbe{ProbeURL: p.ProbeURL, SpeedURL: p.SpeedURL, PolicyID: p.ID, Budget: p.ProbeBudgetBytes})
+			body, _ := json.Marshal(profileProbe{ProbeURL: p.ProbeURL, SpeedURL: p.SpeedURL, PolicyID: p.ID, Budget: p.ProbeBudgetBytes, Automatic: true})
 			ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
 			_, err := a.test(ctx, wire.Command{Action: "speed-test", Target: route.Config.ID, Payload: body})
 			cancel()

@@ -99,6 +99,8 @@ type Runtime struct {
 	probeBytes          atomic.Int64
 	probeWindow         time.Time
 	budget              map[string]int64
+	capacityBudget      map[string]int64
+	capacityHints       map[string]capacityHint
 	visited             map[string]time.Time
 	coldCursor          int
 	constraints         *config.Config
@@ -119,7 +121,7 @@ type Runtime struct {
 }
 
 func NewRuntime(ctx context.Context, roots ...string) *Runtime {
-	r := &Runtime{ctx: ctx, entries: map[string]*engineEntry{}, current: map[string]*engineEntry{}, policies: map[string]*policyState{}, valid: map[string]time.Time{}, slots: map[int]bool{}, budget: map[string]int64{}, visited: map[string]time.Time{}, probeWindow: time.Now()}
+	r := &Runtime{ctx: ctx, entries: map[string]*engineEntry{}, current: map[string]*engineEntry{}, policies: map[string]*policyState{}, valid: map[string]time.Time{}, slots: map[int]bool{}, budget: map[string]int64{}, capacityBudget: map[string]int64{}, capacityHints: map[string]capacityHint{}, visited: map[string]time.Time{}, probeWindow: time.Now()}
 	r.rootDir = "/data/runtime"
 	r.localV1 = os.Getenv("RELAYWEAVE_ROUTING_ALGORITHM") == "local-v1"
 	if len(roots) > 0 {
@@ -334,6 +336,7 @@ func (r *Runtime) ensure(ctx context.Context, c config.Config, route config.Rout
 		e.route.CeilingBPS = int64(path.DownloadMbps) * 125000
 	}
 	r.mu.Lock()
+	r.restoreEntryCapacityLocked(e, c, time.Now())
 	r.entries[key] = e
 	r.mu.Unlock()
 	return e, nil

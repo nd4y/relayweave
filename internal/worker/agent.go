@@ -28,19 +28,22 @@ import (
 )
 
 type savedState struct {
-	RoutingVersion  int                    `json:"routing_version,omitempty"`
-	Rollovers       []rolloverRecord       `json:"rollovers,omitempty"`
-	ProbeDay        time.Time              `json:"probe_day"`
-	ProbeBudget     map[string]int64       `json:"probe_budget"`
-	FenceGeneration int64                  `json:"fence_generation"`
-	GuardVersion    int64                  `json:"guard_version,omitempty"`
-	Constraints     *config.Config         `json:"constraints,omitempty"`
-	Generation      int64                  `json:"generation"`
-	Config          *config.Config         `json:"config,omitempty"`
-	Artifacts       []core.Artifact        `json:"artifacts"`
-	Results         []wire.Result          `json:"results"`
-	Done            map[string]wire.Result `json:"done"`
-	Drained         bool                   `json:"drained"`
+	RoutingVersion      int                     `json:"routing_version,omitempty"`
+	Rollovers           []rolloverRecord        `json:"rollovers,omitempty"`
+	ProbeDay            time.Time               `json:"probe_day"`
+	ProbeBudget         map[string]int64        `json:"probe_budget"`
+	ProbeBudgetVersion  int                     `json:"probe_budget_version,omitempty"`
+	ProbeCapacityBudget map[string]int64        `json:"probe_capacity_budget,omitempty"`
+	CapacityHints       map[string]capacityHint `json:"capacity_hints,omitempty"`
+	FenceGeneration     int64                   `json:"fence_generation"`
+	GuardVersion        int64                   `json:"guard_version,omitempty"`
+	Constraints         *config.Config          `json:"constraints,omitempty"`
+	Generation          int64                   `json:"generation"`
+	Config              *config.Config          `json:"config,omitempty"`
+	Artifacts           []core.Artifact         `json:"artifacts"`
+	Results             []wire.Result           `json:"results"`
+	Done                map[string]wire.Result  `json:"done"`
+	Drained             bool                    `json:"drained"`
 }
 type Agent struct {
 	legacyJournal         bool
@@ -122,13 +125,15 @@ func AgentRun(ctx context.Context) error {
 	}
 	if !a.state.ProbeDay.IsZero() {
 		r.mu.Lock()
-		r.probeWindow = a.state.ProbeDay
-		r.budget = a.state.ProbeBudget
-		if r.budget == nil {
-			r.budget = map[string]int64{}
-		}
+		r.restoreProbeBudget(a.state.ProbeDay, a.state.ProbeBudget, a.state.ProbeCapacityBudget, a.state.ProbeBudgetVersion)
 		r.mu.Unlock()
 	}
+	r.mu.Lock()
+	r.capacityHints = make(map[string]capacityHint, len(a.state.CapacityHints))
+	for key, hint := range a.state.CapacityHints {
+		r.capacityHints[key] = hint
+	}
+	r.mu.Unlock()
 	a.runtime = r
 	if a.loadedGuard != nil {
 		r.RestrictLiveGuard(*a.loadedGuard)
@@ -526,22 +531,26 @@ func (a *Agent) saveLocked() error {
 }
 
 type mutableState struct {
-	RoutingVersion int                    `json:"routing_version,omitempty"`
-	Rollovers      []rolloverRecord       `json:"rollovers,omitempty"`
-	GuardVersion   int64                  `json:"guard_version,omitempty"`
-	ProbeDay       time.Time              `json:"probe_day"`
-	ProbeBudget    map[string]int64       `json:"probe_budget"`
-	Generation     int64                  `json:"generation"`
-	Fence          int64                  `json:"fence"`
-	Lease          time.Time              `json:"lease"`
-	Done           map[string]wire.Result `json:"done"`
-	Results        []wire.Result          `json:"results"`
-	Drained        bool                   `json:"drained"`
+	RoutingVersion      int                     `json:"routing_version,omitempty"`
+	Rollovers           []rolloverRecord        `json:"rollovers,omitempty"`
+	GuardVersion        int64                   `json:"guard_version,omitempty"`
+	ProbeDay            time.Time               `json:"probe_day"`
+	ProbeBudget         map[string]int64        `json:"probe_budget"`
+	ProbeBudgetVersion  int                     `json:"probe_budget_version,omitempty"`
+	ProbeCapacityBudget map[string]int64        `json:"probe_capacity_budget,omitempty"`
+	CapacityHints       map[string]capacityHint `json:"capacity_hints,omitempty"`
+	Generation          int64                   `json:"generation"`
+	Fence               int64                   `json:"fence"`
+	Lease               time.Time               `json:"lease"`
+	Done                map[string]wire.Result  `json:"done"`
+	Results             []wire.Result           `json:"results"`
+	Drained             bool                    `json:"drained"`
 }
 
 func (a *Agent) saveMeta() error {
 	m := mutableState{RoutingVersion: wire.RoutingVersion, Generation: a.state.Generation, Fence: a.state.FenceGeneration, GuardVersion: a.state.GuardVersion, Done: a.state.Done, Results: a.state.Results, Drained: a.state.Drained}
 	m.ProbeDay, m.ProbeBudget = a.state.ProbeDay, a.state.ProbeBudget
+	m.ProbeBudgetVersion, m.ProbeCapacityBudget, m.CapacityHints = a.state.ProbeBudgetVersion, a.state.ProbeCapacityBudget, a.state.CapacityHints
 	if a.runtime != nil {
 		a.runtime.mu.RLock()
 		m.Rollovers = a.runtime.rolloverRecordsLocked()
@@ -550,6 +559,12 @@ func (a *Agent) saveMeta() error {
 		for k, v := range a.runtime.budget {
 			m.ProbeBudget[k] = v
 		}
+		m.ProbeBudgetVersion = 1
+		m.ProbeCapacityBudget = cloneProbeBudget(a.runtime.capacityBudget)
+		if a.runtime.capacityBudget == nil {
+			m.ProbeCapacityBudget = cloneProbeBudget(a.runtime.budget)
+		}
+		m.CapacityHints = a.runtime.capacitySnapshotLocked(time.Now())
 		a.runtime.mu.RUnlock()
 	}
 	if a.state.Config != nil {
@@ -599,6 +614,11 @@ func (a *Agent) loadMeta() error {
 		return nil
 	}
 	a.state.ProbeDay, a.state.ProbeBudget = m.ProbeDay, m.ProbeBudget
+	if !validCapacityBudget(m.ProbeBudget, m.ProbeCapacityBudget) || len(m.CapacityHints) > processLimit*2 {
+		return fmt.Errorf("worker_metadata_corrupt")
+	}
+	a.state.ProbeBudgetVersion, a.state.ProbeCapacityBudget = m.ProbeBudgetVersion, m.ProbeCapacityBudget
+	a.state.CapacityHints = m.CapacityHints
 	if m.Done != nil {
 		a.state.Done = m.Done
 	}
