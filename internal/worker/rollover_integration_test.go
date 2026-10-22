@@ -187,21 +187,14 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer oldTCP.Close()
-	var tcpSequence, udpSequence uint64
+	var adhocSequence uint64
 	assertEcho := func(conn net.Conn) {
 		t.Helper()
-		conn.SetDeadline(time.Now().Add(3 * time.Second))
-		tcpSequence++
-		payload := []byte("persistent-sequence-payload-" + strconv.FormatUint(tcpSequence, 10))
-		if _, e := conn.Write(payload); e != nil {
+		adhocSequence++
+		if e := rolloverEchoSequence(conn, adhocSequence); e != nil {
 			t.Fatal(e)
 		}
-		got := make([]byte, len(payload))
-		if _, e := io.ReadFull(conn, got); e != nil || !bytes.Equal(got, payload) {
-			t.Fatal("persistent TCP interrupted", e)
-		}
 	}
-	assertEcho(oldTCP)
 	packets, err := (core.XrayAdapter{}).OpenUDP(ctx, socksListen, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -211,27 +204,37 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 	if oldPID == 0 {
 		t.Fatal("old engine process missing")
 	}
-	assertUDP := func() {
+	heldCtx, stopHeld := context.WithCancel(ctx)
+	held := startRolloverHeldOwner(heldCtx, cancel, oldTCP, packets, "origin.test", udp.LocalAddr().(*net.UDPAddr).Port, oldPID, old.Instance.PID.Load, func() (string, bool) {
+		actual := ""
+		if p := persistentUDPPeer.Load(); p != nil {
+			actual = p.(string)
+		}
+		return actual, changedUDPPeer.Load()
+	}, time.Second)
+	defer func() { stopHeld(); oldTCP.Close(); packets.Close(); <-held.Done }()
+	checkHeld := func() {
 		t.Helper()
-		packets.SetReadDeadline(time.Now().Add(3 * time.Second))
-		udpSequence++
-		payload := []byte("persistent-udp-sequence-" + strconv.FormatUint(udpSequence, 10))
-		if e := packets.WritePacket(core.Packet{Host: "origin.test", Port: udp.LocalAddr().(*net.UDPAddr).Port, Payload: payload}); e != nil {
+		select {
+		case e := <-held.Errors:
 			t.Fatal(e)
-		}
-		packet, e := packets.ReadPacket(make([]byte, 2048))
-		if e != nil || !bytes.Equal(packet.Payload, payload) {
-			t.Fatal("UDP association interrupted", e)
-		}
-		if changedUDPPeer.Load() {
-			t.Fatal("held UDP association changed actual origin peer mapping")
+		default:
 		}
 	}
-	assertUDP()
+	select {
+	case <-held.Ready:
+	case <-ctx.Done():
+		checkHeld()
+		t.Fatal(ctx.Err())
+	case <-time.After(10 * time.Second):
+		checkHeld()
+		t.Fatal("held client failed to start")
+	}
 	heldSince := time.Now()
 	lastCheckpoint := time.Time{}
 	rotations := 0
 	checkpoint := func(final bool) {
+		checkHeld()
 		if old.Instance.PID.Load() != oldPID {
 			t.Fatal("held engine process changed")
 		}
@@ -246,7 +249,9 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 			references += entry.route.References.Load()
 		}
 		r.mu.RUnlock()
-		writeRolloverSoakCheckpoint(t, rolloverSoakCheckpoint{SourceSHA: os.Getenv("ROLLOVER_SOURCE_SHA"), CoreSHA: hex.EncodeToString(digest[:]), CoreVersion: version, HeldSince: heldSince, At: time.Now(), Seconds: time.Since(heldSince).Seconds(), TCPSequence: tcpSequence, UDPSequence: udpSequence, OldPID: oldPID, OldActive: old.Active.Load(), Engines: engines, References: references, Rotations: rotations, Final: final, DR1Passed: final && soak >= 24*time.Hour && time.Since(heldSince) >= 24*time.Hour})
+		snapshot := held.Snapshot.Load()
+		writeRolloverSoakCheckpoint(t, rolloverSoakCheckpoint{SourceSHA: os.Getenv("ROLLOVER_SOURCE_SHA"), CoreSHA: hex.EncodeToString(digest[:]), CoreVersion: version, HeldSince: heldSince, At: time.Now(), Seconds: time.Since(heldSince).Seconds(), TCPSequence: snapshot.TCPSequence, UDPSequence: snapshot.UDPSequence, OldPID: snapshot.OldPID, UDPOriginPeer: snapshot.UDPOriginPeer, LastKeepalive: snapshot.At, OldActive: old.Active.Load(), Engines: engines, References: references, Rotations: rotations, Final: final, DR1Passed: final && soak >= 24*time.Hour && time.Since(heldSince) >= 24*time.Hour})
+		checkHeld()
 	}
 	rotate := func(index int) {
 		t.Helper()
@@ -282,6 +287,7 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 			}
 			select {
 			case <-ctx.Done():
+				checkHeld()
 				t.Fatal("canary deadline", ctx.Err())
 			default:
 			}
@@ -298,8 +304,7 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 					t.Fatal(e)
 				}
 			}
-			assertEcho(oldTCP)
-			assertUDP()
+			checkHeld()
 			checkpoint(false)
 			if state == "active_draining" {
 				break
@@ -329,8 +334,7 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 			assertEcho(conn)
 			conn.Close()
 		}
-		assertEcho(oldTCP)
-		assertUDP()
+		checkHeld()
 		fresh, err := (core.XrayAdapter{}).OpenUDP(ctx, socksListen, 2*time.Second)
 		if err != nil {
 			t.Fatal("new UDP association after promotion", err)
@@ -355,19 +359,18 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 		if ctx.Err() != nil {
 			t.Fatal("soak deadline", ctx.Err())
 		}
-		assertEcho(oldTCP)
-		assertUDP()
+		checkHeld()
 		checkpoint(false)
 		if rotations < 4 && time.Since(heldSince) >= time.Duration(rotations)*soak/4 {
 			rotate(rotations + 1)
 		}
 		select {
 		case <-ctx.Done():
+			checkHeld()
 			t.Fatal(ctx.Err())
 		case <-time.After(time.Second):
 		}
 	}
-	assertEcho(oldTCP)
-	assertUDP()
+	checkHeld()
 	checkpoint(true)
 }

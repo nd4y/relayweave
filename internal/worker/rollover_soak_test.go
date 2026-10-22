@@ -11,13 +11,14 @@ import (
 )
 
 type rolloverSoakCheckpoint struct {
-	SourceSHA, CoreSHA, CoreVersion string
-	HeldSince, At                   time.Time
-	Seconds                         float64
-	TCPSequence, UDPSequence        uint64
-	OldPID, OldActive, References   int64
-	Engines, Rotations              int
-	Final, DR1Passed                bool
+	SourceSHA, CoreSHA, CoreVersion, UDPOriginPeer string
+	LastKeepalive                                  time.Time
+	HeldSince, At                                  time.Time
+	Seconds                                        float64
+	TCPSequence, UDPSequence                       uint64
+	OldPID, OldActive, References                  int64
+	Engines, Rotations                             int
+	Final, DR1Passed                               bool
 }
 
 func rolloverSoakDuration(t *testing.T) time.Duration {
