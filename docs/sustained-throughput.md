@@ -1,9 +1,61 @@
 # Sustained throughput: design and validation plan
 
-Status: proposed next development stage, not an implemented controller or an
-accepted performance result. See [automatic routing](automatic-routing-goals.md)
-and [validation](validation.md). A high short speed-test result does not prove
+Status: first implementation available; sustained WAN acceptance is pending.
+The complete controller below remains a development contract. See
+[automatic routing](automatic-routing-goals.md) and [validation](validation.md).
+A high short speed-test result does not prove
 continuous throughput, single-stream bonding or symmetrical upload performance.
+
+## Implemented first stage
+
+Automatic profile/IP-group and ISP allocation now distinguish individually
+observed quiet TCP sockets from transferring/new/unobserved work. A socket with
+no recent byte transfer after its initial setup retains a small0.05 load cost;
+new connections, UDP and stale observations retain full load. Close removes the
+idle observation so it cannot discount a later connection. This is a network
+activity heuristic, not application-level traffic classification.
+
+Worker status exposes direction-specific10/60second exponential rate averages
+and the actual load operands. A stale active measurement can serve as an explicitly
+labelled historical prior for up to24hours, capped at the unknown100Mbps prior.
+It does not become a fresh measurement or grant health/admission. A previously
+slow measured path must not become faster solely because its sample expired.
+Encrypted restart hints still expire at15minutes; this change does not extend
+that persistence TTL or refund/increase probe reservations.
+
+`cmd/relayweave-bench` is an opt-in workload generator, not a background probe:
+
+```sh
+# Build on the build host, then run on the actual measurement host.
+go build -o relayweave-bench ./cmd/relayweave-bench
+export RELAYWEAVE_BENCH_PROXY=http://127.0.0.1:18080
+export RELAYWEAVE_BENCH_DOWNLOAD_URL=https://speed.cloudflare.com/__down
+export RELAYWEAVE_BENCH_UPLOAD_URL=https://speed.cloudflare.com/__up
+./relayweave-bench --duration=30m --max-bytes=412316860416 \
+  --chunk-bytes=67108864 --parallel=4 --adaptive >download.jsonl
+./relayweave-bench --duration=3m --max-bytes=42949672960 \
+  --chunk-bytes=8388608 --parallel=4 --adaptive --upload >upload.jsonl
+```
+
+These example caps permit substantial traffic; every invocation requires an
+explicit cap. Endpoints and proxy credentials are environment-only and excluded
+from output. HTTPS verification stays enabled. Redirects and compressed download
+responses are rejected. No target defaults or automatic invocation are provided.
+HTTP/HTTPS/SOCKS5 proxy URLs are supported; an empty proxy setting is an explicit
+direct baseline. `--allow-http` is for isolated synthetic HTTP fixtures.
+
+The generator streams/downloads to discard and uploads generated synthetic data.
+Its concurrency search increases4/8/16 at bounded30second steps, falls back on a
+plateau or relative-latency regression and stops searching. This changes only the
+generator's own concurrency; a proxy cannot manufacture parallel connections for
+an unrelated application. Requests keep their chosen path until completion.
+
+JSONL separates valid completed bytes, attempted payload bytes, conservative
+application-byte reservations, failures and latency sample count. Its10second
+rate distributions describe payload transfer; valid average throughput excludes
+incomplete/invalid transfers. Transport overhead is outside the application-byte
+cap. Requests cut by the workload deadline can leave partial payload in the
+attempted count. A byte-cap stop is distinguished from a full-duration result.
 
 ## Objective
 
