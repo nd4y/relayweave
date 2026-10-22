@@ -68,7 +68,7 @@ func TestTopologyRecordsAutomaticWeightsWithoutChangingSelection(t *testing.T) {
 			}
 		}
 		if compared != 2 {
-				t.Fatal("expected actual compared profile scores")
+			t.Fatal("expected actual compared profile scores")
 		}
 	}
 }

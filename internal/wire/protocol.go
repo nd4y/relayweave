@@ -26,15 +26,15 @@ func init()                                   { encoding.RegisterCodec(Codec{}) 
 
 type Hello struct {
 	ComputeSnapshots []compute.Snapshot `json:"compute_snapshots,omitempty"`
-	RoutingVersion int             `json:"routing_version,omitempty"`
-	Topology       *topology.Frame `json:"topology,omitempty"`
-	WorkerID       string          `json:"worker_id"`
-	Generation     int64           `json:"generation"`
-	GuardVersion   int64           `json:"guard_version,omitempty"`
-	Status         json.RawMessage `json:"status,omitempty"`
-	Error          string          `json:"error,omitempty"`
-	CSR            []byte          `json:"csr,omitempty"`
-	Results        []Result        `json:"results,omitempty"`
+	RoutingVersion   int                `json:"routing_version,omitempty"`
+	Topology         *topology.Frame    `json:"topology,omitempty"`
+	WorkerID         string             `json:"worker_id"`
+	Generation       int64              `json:"generation"`
+	GuardVersion     int64              `json:"guard_version,omitempty"`
+	Status           json.RawMessage    `json:"status,omitempty"`
+	Error            string             `json:"error,omitempty"`
+	CSR              []byte             `json:"csr,omitempty"`
+	Results          []Result           `json:"results,omitempty"`
 }
 type Command struct {
 	WorkerID string          `json:"worker_id,omitempty"`

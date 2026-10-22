@@ -51,15 +51,15 @@ type policyState struct {
 	computeDeadline    time.Duration
 	localPlans         [2]routing.Plan
 	localAt            [2]time.Time
-	topologyFactors  map[string]string
-	topologyPrepared time.Time
-	rank             map[string]int
-	config           config.Policy
-	best             []*Route
-	chosen           string
-	changed          time.Time
-	egressCredit     map[string]float64
-	profileCredit    map[string]map[string]float64
+	topologyFactors    map[string]string
+	topologyPrepared   time.Time
+	rank               map[string]int
+	config             config.Policy
+	best               []*Route
+	chosen             string
+	changed            time.Time
+	egressCredit       map[string]float64
+	profileCredit      map[string]map[string]float64
 }
 type Runtime struct {
 	computeCache        *compute.Cache
@@ -79,43 +79,43 @@ type Runtime struct {
 	computePolicyCursor int
 	localV1             bool
 	localColdAt         time.Time
-	qualityEpoch     uint64
-	qualityAuthority map[string]qualityAuthority
-	restoreRollovers []rolloverRecord
-	rolloverDirty atomic.Bool
-	rollovers map[string]*pathRollover
-	ctx             context.Context
-	mu              sync.RWMutex
-	applyMu         sync.Mutex
-	config          config.Config
-	entries         map[string]*engineEntry
-	current         map[string]*engineEntry
-	policies        map[string]*policyState
-	valid           map[string]time.Time
-	slots           map[int]bool
-	cursor          atomic.Uint64
-	drained         atomic.Bool
-	lease           atomic.Int64
-	probeBytes      atomic.Int64
-	probeWindow     time.Time
-	budget          map[string]int64
-	visited         map[string]time.Time
-	coldCursor      int
-	constraints     *config.Config
-	liveGuard       *config.LiveGuard
-	allowed         map[string]map[string]string
-	hardExpiry      map[string]time.Time
-	staging         map[string]probePermit
-	admission       map[string]*atomic.Int64
-	rootDir         string
-	retiredUp       atomic.Int64
-	retiredDown     atomic.Int64
-	dnsMu           sync.Mutex
-	endpointIPs     map[string]endpointResolution
-	targetHealth    map[string]targetObservation
-	routerTelemetry *routertelemetry.Consumer
-	ispObservations map[string]ispObservation
-	ispAllocations  map[string]allocationEvidence
+	qualityEpoch        uint64
+	qualityAuthority    map[string]qualityAuthority
+	restoreRollovers    []rolloverRecord
+	rolloverDirty       atomic.Bool
+	rollovers           map[string]*pathRollover
+	ctx                 context.Context
+	mu                  sync.RWMutex
+	applyMu             sync.Mutex
+	config              config.Config
+	entries             map[string]*engineEntry
+	current             map[string]*engineEntry
+	policies            map[string]*policyState
+	valid               map[string]time.Time
+	slots               map[int]bool
+	cursor              atomic.Uint64
+	drained             atomic.Bool
+	lease               atomic.Int64
+	probeBytes          atomic.Int64
+	probeWindow         time.Time
+	budget              map[string]int64
+	visited             map[string]time.Time
+	coldCursor          int
+	constraints         *config.Config
+	liveGuard           *config.LiveGuard
+	allowed             map[string]map[string]string
+	hardExpiry          map[string]time.Time
+	staging             map[string]probePermit
+	admission           map[string]*atomic.Int64
+	rootDir             string
+	retiredUp           atomic.Int64
+	retiredDown         atomic.Int64
+	dnsMu               sync.Mutex
+	endpointIPs         map[string]endpointResolution
+	targetHealth        map[string]targetObservation
+	routerTelemetry     *routertelemetry.Consumer
+	ispObservations     map[string]ispObservation
+	ispAllocations      map[string]allocationEvidence
 }
 
 func NewRuntime(ctx context.Context, roots ...string) *Runtime {
