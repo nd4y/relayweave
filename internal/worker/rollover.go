@@ -90,7 +90,7 @@ func (r *Runtime) advanceRolloversLocked(now time.Time) {
 			p.step = 0
 			p.attempts++
 		}
-		if p.next.ConsecutiveFailures.Load() >= 3 || p.failed >= 5 {
+		if locallyFailedForAdmission(p.next) || p.failed >= 5 {
 			p.state = "rolled_back"
 			p.reason = "candidate_protocol_failures"
 			p.changed = now
@@ -157,20 +157,14 @@ func (r *Runtime) chooseRevisionLocked(v *Route, now time.Time) *Route {
 	}
 	if p.state == "canary" {
 		p.sequence++
-		if p.step == 0 {
-			if p.windowAt.IsZero() || now.Sub(p.windowAt) >= 30*time.Second {
-				p.windowAt = now
-				p.windowBytes = p.next.BytesUp.Load() + p.next.BytesDown.Load()
-			}
-			if p.next.References.Load() >= 2 || now.Sub(p.lastAdmission) < time.Second || p.next.BytesUp.Load()+p.next.BytesDown.Load()-p.windowBytes >= 8<<20 {
-				return p.old
-			}
+		if int(((p.sequence-1)*37)%100) >= rolloverShares[p.step] {
+			return p.old
 		}
-		if int(((p.sequence-1)*37)%100) < rolloverShares[p.step] {
-			p.lastAdmission = now
-			return p.next
+		if p.step == 0 && !r.firstCanaryAdmissionAllowedLocked(p, now) {
+			return p.old
 		}
-		return p.old
+		p.lastAdmission = now
+		return p.next
 	}
 	return v
 }

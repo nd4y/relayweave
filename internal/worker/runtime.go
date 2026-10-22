@@ -963,6 +963,17 @@ func (v *Route) success(d time.Duration) {
 	v.BlockedUntil.Store(0)
 }
 func (v *Route) failed() {
+	// A cooldown alone cannot prove recovery. Remember the latest independent
+	// successful-probe sequence observed at a local failure, without moving it
+	// backwards when concurrent dials report errors out of order.
+	if v.Instance != nil {
+		proof := v.Instance.ProbeSamples.Load()
+		for previous := v.FailureProbeSamples.Load(); proof > previous; previous = v.FailureProbeSamples.Load() {
+			if v.FailureProbeSamples.CompareAndSwap(previous, proof) {
+				break
+			}
+		}
+	}
 	n := v.ConsecutiveFailures.Add(1)
 	if n >= 3 {
 		v.BlockedUntil.Store(time.Now().Add(time.Duration(min(int64(60), 1<<min(n-3, 6))) * time.Second).UnixNano())
