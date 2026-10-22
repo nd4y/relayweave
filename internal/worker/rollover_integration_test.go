@@ -127,7 +127,21 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/bulk" {
 			w.Header().Set("Content-Length", "1048576")
-			io.CopyN(w, strings.NewReader(strings.Repeat("b", int(qualityBulkPayload))), qualityBulkPayload)
+			// A controlled equal-capacity reference, not a loopback speed test.
+			// Unpaced 1 MiB bodies can arrive in under a millisecond, letting
+			// scheduling/TTFB jitter dominate the unchanged 90% quality guard.
+			// Pace real bytes equally on both paths at 5 MiB/s (~200 ms).
+			const chunkBytes, bytesPerSecond = 64 << 10, 5 << 20
+			chunk := strings.Repeat("b", chunkBytes)
+			started := time.Now()
+			for sent := 0; sent < int(qualityBulkPayload); sent += chunkBytes {
+				due := started.Add(time.Duration(int64(sent+chunkBytes) * int64(time.Second) / bytesPerSecond))
+				time.Sleep(time.Until(due))
+				if _, err := io.WriteString(w, chunk); err != nil {
+					return
+				}
+				w.(http.Flusher).Flush()
+			}
 			return
 		}
 		w.WriteHeader(204)
