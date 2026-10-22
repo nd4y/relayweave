@@ -43,41 +43,25 @@ func dnsUDPCheck(ctx context.Context, v *Route, target string) bool {
 }
 
 func (a *Agent) probeUDPCapability(ctx context.Context) {
+	if !a.probeMu.TryLock() {
+		return
+	}
+	defer a.probeMu.Unlock()
 	r := a.runtime
 	if !r.applyMu.TryLock() {
 		return
 	}
-	defer r.applyMu.Unlock()
 	r.mu.Lock()
-	var candidate *Route
-	policy := ""
-	budget := int64(0)
 	now := time.Now()
-	if !r.drained.Load() && now.Unix() <= r.lease.Load() {
-		for _, p := range r.policies {
-			for _, id := range p.config.Routes {
-				e := r.current[id]
-				if e == nil || !e.route.Config.CheckServer || !e.route.Config.UDP || !e.route.Instance.Ready.Load() || !r.permitted(p.config.ID, e.route.Config) || now.Unix()-e.route.UDPAttempt.Load() < 30 {
-					continue
-				}
-				if candidate == nil || e.route.UDPAttempt.Load() < candidate.UDPAttempt.Load() {
-					candidate = e.route
-					policy = p.config.ID
-					budget = p.config.ProbeBudgetBytes
-				}
-			}
-		}
-	}
-	if candidate != nil {
-		candidate.References.Add(1)
-		candidate.UDPAttempt.Store(now.Unix())
-	}
+	choice := r.reserveUDPProbeLocked(now)
 	r.mu.Unlock()
-	if candidate == nil {
+	r.applyMu.Unlock()
+	if choice.route == nil {
 		return
 	}
+	candidate := choice.route
 	defer candidate.References.Add(-1)
-	if !r.reserveProbe(now, policy, 2048, budget) {
+	if !r.reserveProbe(now, choice.policy, 2048, choice.budget) {
 		return
 	}
 	a.mu.Lock()
@@ -91,17 +75,119 @@ func (a *Agent) probeUDPCapability(ctx context.Context) {
 		targets = []string{"1.1.1.1:53", "9.9.9.9:53"}
 	}
 	ok := false
+	probeCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
 	for _, target := range targets {
-		if dnsUDPCheck(ctx, candidate, target) {
+		if dnsUDPCheck(probeCtx, candidate, target) {
 			ok = true
 			break
 		}
 	}
-	candidate.UDPHealthy.Store(ok)
-	candidate.UDPChecked.Store(now.Unix())
+	recordUDPProbe(candidate, ok, time.Now())
+}
+
+// A separate serial loop cannot be delayed behind the ten-second capacity
+// sampler. Admission and apply locks are released before persistence/network I/O.
+func (a *Agent) udpProbes() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		a.probeUDPCapability(a.ctx)
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+type udpProbeChoice struct {
+	route  *Route
+	policy string
+	budget int64
+}
+
+// Call with r.mu held. Refresh admitted routes at 45s (90s admission TTL),
+// otherwise finish one three-sample warmup before spreading to cold routes.
+// Failed routes back off30s; successful warmup samples are spaced at least1s.
+func (r *Runtime) reserveUDPProbeLocked(now time.Time) udpProbeChoice {
+	if r.drained.Load() || now.Unix() > r.lease.Load() {
+		return udpProbeChoice{}
+	}
+	choices := map[*Route]udpProbeChoice{}
+	add := func(v *Route, p *policyState) {
+		if !v.Config.CheckServer || !v.Config.UDP || !v.Instance.Ready.Load() || r.establishedOnlyLocked(v.Config) || !r.permitted(p.config.ID, v.Config) {
+			return
+		}
+		interval := int64(1)
+		if udpProvenAt(v, now) {
+			interval = 45
+		} else if v.UDPChecked.Load() != 0 && !v.UDPHealthy.Load() {
+			interval = 30
+		}
+		if v.UDPAttempt.Load() != 0 && now.Unix()-v.UDPAttempt.Load() < interval {
+			return
+		}
+		if prior, ok := choices[v]; !ok || p.config.ProbeBudgetBytes > prior.budget || (p.config.ProbeBudgetBytes == prior.budget && p.config.ID < prior.policy) {
+			choices[v] = udpProbeChoice{v, p.config.ID, p.config.ProbeBudgetBytes}
+		}
+	}
+	for _, p := range r.policies {
+		for _, id := range p.config.Routes {
+			if e := r.current[id]; e != nil {
+				add(e.route, p)
+			}
+			if plan := r.rollovers[id]; plan != nil && plan.state != "completed" && (plan.state != "active_draining" || !udpProvenAt(plan.next, now)) {
+				add(plan.old, p)
+			}
+		}
+	}
+	var best udpProbeChoice
+	better := func(a, b *Route) bool {
+		ap, bp := udpProvenAt(a, now), udpProvenAt(b, now)
+		if ap != bp {
+			return ap
+		} // Protect fresh admissions before more exploration.
+		if ap && a.UDPChecked.Load() != b.UDPChecked.Load() {
+			return a.UDPChecked.Load() < b.UDPChecked.Load()
+		}
+		ac, bc := a.UDPChecks.Load(), b.UDPChecks.Load()
+		if now.Unix()-a.UDPChecked.Load() > 90 {
+			ac = 0
+		}
+		if now.Unix()-b.UDPChecked.Load() > 90 {
+			bc = 0
+		}
+		if ac != bc {
+			return ac > bc
+		}
+		if a.UDPAttempt.Load() != b.UDPAttempt.Load() {
+			return a.UDPAttempt.Load() < b.UDPAttempt.Load()
+		}
+		if a.Config.ID != b.Config.ID {
+			return a.Config.ID < b.Config.ID
+		}
+		return a.Config.Endpoint < b.Config.Endpoint
+	}
+	for _, c := range choices {
+		if best.route == nil || better(c.route, best.route) {
+			best = c
+		}
+	}
+	if best.route != nil {
+		best.route.References.Add(1)
+		best.route.UDPAttempt.Store(now.Unix())
+	}
+	return best
+}
+
+func recordUDPProbe(v *Route, ok bool, now time.Time) {
+	if !ok || now.Unix()-v.UDPChecked.Load() > 90 {
+		v.UDPChecks.Store(0)
+	}
+	v.UDPHealthy.Store(ok)
+	v.UDPChecked.Store(now.Unix())
 	if ok {
-		candidate.UDPChecks.Add(1)
-	} else {
-		candidate.UDPChecks.Store(0)
+		v.UDPChecks.Add(1)
 	}
 }

@@ -42,6 +42,7 @@ type savedState struct {
 	Drained         bool                   `json:"drained"`
 }
 type Agent struct {
+	probeMu               sync.Mutex
 	retryAt               atomic.Int64
 	failureAttempts       atomic.Int64
 	workerID              string
@@ -176,6 +177,7 @@ func AgentRun(ctx context.Context) error {
 	defer func() { <-admissionDone }()
 	go a.commandLoop()
 	go a.adaptiveProbes()
+	go a.udpProbes()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	lastLeaseWrite := time.Time{}
