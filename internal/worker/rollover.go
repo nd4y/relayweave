@@ -40,6 +40,14 @@ func (r *Runtime) installRolloversLocked(previous map[string]*engineEntry, now t
 			// issuing a few tickets never makes it a last-known-good baseline.
 			baseline = prior.old
 		}
+		// A provider can return to the original, still-running baseline while
+		// its replacement is only a canary. It is already the current engine;
+		// a self-rollover would never drain and would miscount its live sessions.
+		if baseline == next.route {
+			delete(r.rollovers, id)
+			r.rolloverDirty.Store(true)
+			continue
+		}
 		r.rollovers[id] = &pathRollover{old: baseline, next: next.route, state: "warming", reason: "collecting_protocol_evidence", started: now, changed: now, serial: 1}
 		r.rolloverDirty.Store(true)
 	}
