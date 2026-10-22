@@ -1,0 +1,7 @@
+# Add with -f compose.yaml -f compose.two.yaml for exactly two identities.
+services:
+  compute-2:
+    extends:
+      file: compose.yaml
+      service: compute-1
+    volumes: ["${COMPUTE_IDENTITY_2:?set second peer identity directory}:/identity:rw"]

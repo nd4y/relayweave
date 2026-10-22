@@ -20,7 +20,7 @@ func candidateEvidence(v *Route, score *float64, reason string) topology.Candida
 func (r *Runtime) captureCandidatesLocked(p *policyState, result []*Route, d *topology.Decision, now time.Time) {
 	if p != nil {
 		d.Mode = p.config.Mode
-		if d.Method != "deterministic_two_choice" && d.Method != "isp_weighted_path_choice" {
+		if d.Method != "deterministic_two_choice" && d.Method != "isp_weighted_path_choice" && d.Method != "local_v1_weighted" {
 			d.Method = p.config.Mode
 		}
 	}
@@ -101,11 +101,14 @@ func (r *Runtime) captureCandidatesLocked(p *policyState, result []*Route, d *to
 }
 func (g *Gateway) topologyCandidates(key, listener, protocol string) ([]*Route, *topology.Decision) {
 	if g.Topology == nil || !g.Topology.Begin() {
+		if g.Dynamic != nil {
+			return g.Dynamic.candidatesForProtocol(key, nil, strings.Contains(protocol, "udp")), nil
+		}
 		return g.candidates(key), nil
 	}
 	d := &topology.Decision{At: time.Now().UTC(), FlowID: g.Topology.FlowID(), Listener: listener, Protocol: protocol, Reason: "selected_by_policy"}
 	if g.Dynamic != nil {
-		return g.Dynamic.candidatesObserved(key, d), d
+		return g.Dynamic.candidatesForProtocol(key, d, strings.Contains(protocol, "udp")), d
 	}
 	list := g.candidates(key)
 	d.Policy = key

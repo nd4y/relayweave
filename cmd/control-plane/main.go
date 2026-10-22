@@ -140,6 +140,12 @@ func run() error {
 		return e
 	}
 	defer s.Store.DB.Close()
+	stopCompute, e := s.StartCompute(ctx)
+	if e != nil {
+		slog.Warn("compute_unavailable; security and configuration services continue")
+	} else {
+		defer stopCompute()
+	}
 	tls, e := identity.ServerTLS(s.IdentityDir)
 	if e != nil {
 		return e
