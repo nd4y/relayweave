@@ -146,6 +146,7 @@ func (r *Runtime) selectAutomaticProfileLocked(p *policyState, lane []*Route, d 
 	groups := roots[:len(lane)]
 	weights := map[string]float64{}
 	groupActive := map[string]int64{}
+	groupLoad := map[string]float64{}
 	best := map[string]*Route{}
 	bestScore := map[string]float64{}
 	evidences := map[string]topology.Candidate{}
@@ -154,6 +155,7 @@ func (r *Runtime) selectAutomaticProfileLocked(p *policyState, lane []*Route, d 
 		score := v.scoreObserved(p.config.Mode, &e)
 		id := groups[i]
 		groupActive[id] += e.Active
+		groupLoad[id] += e.LoadUnits
 		// Keep sampled and unsampled paths in the same service-cost units. An
 		// idle/passive lower bound is not an upper capacity estimate. The prior
 		// is deliberately modest and explicitly labelled, never a measurement.
@@ -162,7 +164,9 @@ func (r *Runtime) selectAutomaticProfileLocked(p *policyState, lane []*Route, d 
 			prior = math.Min(prior, float64(v.CeilingBPS))
 		}
 		estimate := float64(e.SpeedUsedBPS)
-		if estimate <= 0 || (e.SpeedBPS <= 0 && (e.SpeedSource == "delivered_lower_bound" || e.SpeedSource == "active_or_passive_equal")) {
+		knownAge := time.Now().Unix() - v.LastSpeed.Load()
+		historical := v.LastSpeed.Load() > 0 && knownAge >= 900 && knownAge < 86400 && v.SpeedBPS.Load() > 0
+		if estimate <= 0 || (!historical && e.SpeedBPS <= 0 && (e.SpeedSource == "delivered_lower_bound" || e.SpeedSource == "active_or_passive_equal")) {
 			estimate = math.Max(prior, estimate)
 			if estimate == prior {
 				e.SpeedSource = "capacity_prior"
@@ -173,9 +177,9 @@ func (r *Runtime) selectAutomaticProfileLocked(p *policyState, lane []*Route, d 
 		if p.config.Mode == "throughput" {
 			latencyScale = 20000
 		}
-		score = (1 + float64(e.Active)) * 12500000 / estimate * (1 + math.Min(e.EffectiveRTTMS, 1000)/latencyScale) * (1 + float64(e.ConsecutiveFailures)) * (1 + float64(e.ErrorEWMA)/250)
+		score = (1 + e.LoadUnits) * 12500000 / estimate * (1 + math.Min(e.EffectiveRTTMS, 1000)/latencyScale) * (1 + float64(e.ConsecutiveFailures)) * (1 + float64(e.ErrorEWMA)/250)
 		e.Formula = "automatic_capacity_load"
-		load := 1 + float64(e.Active)
+		load := 1 + e.LoadUnits
 		weights[id] = math.Max(weights[id], load/math.Max(score, 1e-9))
 		if best[id] == nil || score < bestScore[id] {
 			best[id] = v
@@ -185,10 +189,11 @@ func (r *Runtime) selectAutomaticProfileLocked(p *policyState, lane []*Route, d 
 	}
 	for i := len(lane); i < len(all); i++ {
 		groupActive[roots[i]] += all[i].Active.Load()
+		groupLoad[roots[i]] += all[i].workload(time.Now())
 	}
 	peak := 0.0
 	for id, w := range weights {
-		weights[id] = w / (1 + float64(groupActive[id]))
+		weights[id] = w / (1 + groupLoad[id])
 		peak = math.Max(peak, weights[id])
 	}
 	if p.profileCredit == nil {
@@ -249,6 +254,7 @@ func (r *Runtime) selectAutomaticProfileLocked(p *policyState, lane []*Route, d 
 			}
 			e.ProfileWeight = normalized[id]
 			e.GroupActive = groupActive[id]
+			e.GroupLoadUnits = groupLoad[id]
 			d.Candidates = append(d.Candidates, e)
 		}
 	}

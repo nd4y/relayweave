@@ -93,6 +93,7 @@ type Runtime struct {
 	policies            map[string]*policyState
 	valid               map[string]time.Time
 	slots               map[int]bool
+	corePortBase        int
 	cursor              atomic.Uint64
 	drained             atomic.Bool
 	lease               atomic.Int64
@@ -300,7 +301,11 @@ func (r *Runtime) ensure(ctx context.Context, c config.Config, route config.Rout
 		r.mu.Unlock()
 		return nil, err
 	}
-	route.Endpoint = net.JoinHostPort("127.0.0.1", fmt.Sprint(41000+slot))
+	base := r.corePortBase
+	if base == 0 {
+		base = 41000
+	}
+	route.Endpoint = net.JoinHostPort("127.0.0.1", fmt.Sprint(base+slot))
 	cfg := c
 	cfg.Cores = []config.Core{binary}
 	cfg.Routes = []config.Route{route}
@@ -960,6 +965,12 @@ func (v *Route) scoreObserved(mode string, evidence *topology.Candidate) float64
 			source = "active_sample"
 		}
 	}
+	// An expired measured slow path must not jump to the faster unknown prior.
+	// This is explicitly historical evidence, not a refreshed measurement.
+	if age := time.Now().Unix() - probeAt; speed == 0 && age >= 900 && age < 86400 && v.SpeedBPS.Load() > 0 {
+		speed = min(v.SpeedBPS.Load(), int64(12500000))
+		source = "historical_capacity_prior"
+	}
 	// Delivered traffic is evidence of a lower bound, never an upper capacity claim.
 	passiveAt := v.LastPassive.Load()
 	if time.Now().Unix()-passiveAt < 30 {
@@ -989,6 +1000,7 @@ func (v *Route) scoreObserved(mode string, evidence *topology.Candidate) float64
 			return
 		}
 		*evidence = topology.Candidate{Egress: v.Config.EgressID, Route: v.Config.ID, Engine: v.Config.Core, Active: active, Reason: "compared", SpeedBPS: probeSpeed, MeasurementAt: probeAt, EffectiveRTTMS: rtt, ConsecutiveFailures: failures, ErrorEWMA: errors, SpeedUsedBPS: usedSpeed, SpeedSource: source, PassiveAt: passiveAt, CeilingBPS: v.CeilingBPS, Formula: formula}
+		evidence.LoadUnits = v.workload(time.Now())
 		if aggregateUsed && usedSpeed > 0 {
 			evidence.Factors = append(evidence.Factors, "aggregate_delivered_lower_bound")
 		}
@@ -1019,7 +1031,7 @@ func (v *Route) scoreObserved(mode string, evidence *topology.Candidate) float64
 			}
 			active, failures, errors = v.Active.Load(), v.ConsecutiveFailures.Load(), v.ErrorEWMA.Load()
 			formula = "capacity_weighted_load"
-			score = (1 + float64(active)) * 12500000 / float64(speed) * latencyPenalty * (1 + float64(failures)) * (1 + float64(errors)/250)
+			score = (1 + v.workload(time.Now())) * 12500000 / float64(speed) * latencyPenalty * (1 + float64(failures)) * (1 + float64(errors)/250)
 			record()
 			return score
 		}

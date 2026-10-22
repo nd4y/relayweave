@@ -208,8 +208,8 @@ func TestPassiveImprovementKeepsFreshMeasuredCapacityBaseline(t *testing.T) {
 	if fastCount < 880 || fastCount > 930 {
 		t.Fatal("slight passive improvement replaced measured slow capacity with unknown-path prior", fastCount)
 	}
-	// Without an active upper-capacity observation, low delivered goodput
-	// must still not downgrade an unknown/idle path.
+	// A historically measured slow path remains a cautious prior after expiry.
+	// It must not become faster merely because its active sample aged out.
 	slow.LastSpeed.Store(time.Now().Add(-time.Hour).Unix())
 	p.profileCredit = nil
 	fastCount = 0
@@ -218,8 +218,8 @@ func TestPassiveImprovementKeepsFreshMeasuredCapacityBaseline(t *testing.T) {
 			fastCount++
 		}
 	}
-	if fastCount < 650 || fastCount > 690 {
-		t.Fatal("passive lower bound was treated as an upper capacity", fastCount)
+	if fastCount < 880 || fastCount > 930 {
+		t.Fatal("expiry promoted a historically slow path to the faster unknown prior", fastCount)
 	}
 }
 

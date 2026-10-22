@@ -45,6 +45,9 @@ type routeConn struct {
 	topologyFlow       string
 	topologyEngine     string
 	topologyEarly      atomic.Bool
+	lastTransfer       time.Time
+	idleObserved       bool
+	closed             bool
 }
 
 func (c *routeConn) checkEarlyFailure() {
@@ -64,6 +67,13 @@ func (c *routeConn) Close() error {
 	c.once.Do(func() {
 		c.checkEarlyFailure()
 		c.err = c.TCPConn.Close()
+		c.mu.Lock()
+		c.closed = true
+		if c.idleObserved {
+			c.route.IdleTCP.Add(-1)
+			c.idleObserved = false
+		}
+		c.mu.Unlock()
 		c.gateway.socketMu.Lock()
 		delete(c.gateway.sockets, c)
 		c.gateway.socketMu.Unlock()
@@ -120,6 +130,9 @@ func (c *routeConn) sample() {
 	up, down, ok := c.info()
 	if !ok {
 		return
+	}
+	if up > c.up || down > c.down {
+		c.lastTransfer = time.Now()
 	}
 	if up >= c.up {
 		c.route.BytesUp.Add(int64(up - c.up))
@@ -186,6 +199,7 @@ func (g *Gateway) sampleSockets() {
 					continue
 				}
 				c.sample()
+				c.observeIdle(time.Now())
 			}
 			routes := []*Route{}
 			if g.Dynamic != nil {
@@ -200,6 +214,7 @@ func (g *Gateway) sampleSockets() {
 			keep := map[*Route]bool{}
 			now := time.Now()
 			for _, v := range routes {
+				v.WorkloadAt.Store(now.Unix())
 				up, down := v.BytesUp.Load(), v.BytesDown.Load()
 				previous, ok := observed[v]
 				var downBPS int64
@@ -211,6 +226,7 @@ func (g *Gateway) sampleSockets() {
 						v.TrafficDownBPS.Store(downBPS)
 						v.TrafficAt.Store(now.Unix())
 						if seconds <= 3 {
+							v.delivery.observe(downBPS, v.TrafficUpBPS.Load(), now)
 							v.requestOnAggregateDrop(previous.downBPS, downBPS, now)
 						} else {
 							// A stalled observer is not fresh routing evidence.
@@ -228,5 +244,21 @@ func (g *Gateway) sampleSockets() {
 				}
 			}
 		}
+	}
+}
+
+func (c *routeConn) observeIdle(now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// New sockets remain fully charged during connection/TLS setup.
+	idle := !c.closed && c.baselineValid && now.Sub(c.openedAt) >= 3*time.Second &&
+		(c.lastTransfer.IsZero() || now.Sub(c.lastTransfer) >= 3*time.Second)
+	if idle != c.idleObserved {
+		if idle {
+			c.route.IdleTCP.Add(1)
+		} else {
+			c.route.IdleTCP.Add(-1)
+		}
+		c.idleObserved = idle
 	}
 }

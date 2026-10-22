@@ -20,6 +20,9 @@ type Candidate struct {
 	Route                 string     `json:"route"`
 	Engine                string     `json:"engine"`
 	Active                int64      `json:"active"`
+	LoadUnits             float64    `json:"load_units,omitempty"`
+	GroupLoadUnits        float64    `json:"group_load_units,omitempty"`
+	EgressLoadUnits       float64    `json:"egress_load_units,omitempty"`
 	Score                 *float64   `json:"score,omitempty"`
 	Reason                string     `json:"reason"`
 	Group                 string     `json:"group,omitempty"`

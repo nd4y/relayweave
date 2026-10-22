@@ -58,6 +58,40 @@ func TestTCPInfoPayloadAccounting(t *testing.T) {
 	}
 }
 
+func TestIdleObservationDoesNotDiscountNewSocketsAfterClose(t *testing.T) {
+	ln, e := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1")})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer ln.Close()
+	ready := make(chan *net.TCPConn, 1)
+	go func() { peer, _ := ln.AcceptTCP(); ready <- peer }()
+	tcp, e := net.DialTCP("tcp", nil, ln.Addr().(*net.TCPAddr))
+	if e != nil {
+		t.Fatal(e)
+	}
+	peer := <-ready
+	defer peer.Close()
+	r := &Route{}
+	r.Active.Store(1)
+	g := &Gateway{sockets: map[*routeConn]struct{}{}}
+	c := &routeConn{TCPConn: tcp, route: r, gateway: g}
+	c.baseline()
+	now := time.Now()
+	c.openedAt = now.Add(-4 * time.Second)
+	c.observeIdle(now)
+	r.WorkloadAt.Store(now.Unix())
+	if r.IdleTCP.Load() != 1 || r.workload(now) != .05 {
+		t.Fatal("idle socket not accounted")
+	}
+	c.Close()
+	c.observeIdle(now)
+	r.Active.Store(1) // A different socket has opened since the last sampler tick.
+	if r.IdleTCP.Load() != 0 || r.workload(now) != 1 {
+		t.Fatal("closed idle socket discounted a new transfer")
+	}
+}
+
 func TestTCPInfoFINIsNotResponsePayload(t *testing.T) {
 	for _, response := range [][]byte{nil, []byte("x"), bytes.Repeat([]byte("reply"), 1024)} {
 		t.Run(fmt.Sprint(len(response)), func(t *testing.T) {

@@ -28,6 +28,9 @@ import (
 )
 
 type Route struct {
+	IdleTCP             atomic.Int64
+	WorkloadAt          atomic.Int64
+	delivery            deliveryWindow
 	FailureProbeSamples atomic.Int64
 	TrafficDownBPS      atomic.Int64
 	TrafficUpBPS        atomic.Int64

@@ -18,6 +18,7 @@ func (r *Runtime) selectEgressLimitLocked(p *policyState, routes []*Route, limit
 	}
 	lanes := map[string][]*Route{}
 	active := map[string]int64{}
+	work := map[string]float64{}
 	for _, v := range routes[:min(len(routes), max(1, limit))] {
 		if r.telemetryDownLocked(v.Config.EgressID, time.Now()) {
 			continue
@@ -26,6 +27,7 @@ func (r *Runtime) selectEgressLimitLocked(p *policyState, routes []*Route, limit
 	}
 	for _, e := range r.entries {
 		active[e.route.Config.EgressID] += e.route.Active.Load()
+		work[e.route.Config.EgressID] += e.route.workload(time.Now())
 	}
 	chosen := ""
 	total := float64(0)
@@ -36,6 +38,10 @@ func (r *Runtime) selectEgressLimitLocked(p *policyState, routes []*Route, limit
 			continue
 		}
 		a := r.automaticISPWeight(p, path, lanes[path.ID], active[path.ID], time.Now())
+		if p.config.Mode == "auto" || p.config.Mode == "throughput" {
+			prior := math.Max(1, a.Base)
+			a.Effective *= (1 + float64(active[path.ID])/prior) / (1 + work[path.ID]/prior)
+		}
 		weight := a.Effective
 		if weight <= 0 {
 			delete(p.egressCredit, path.ID)
@@ -110,6 +116,7 @@ func (r *Runtime) selectEgressLimitLocked(p *policyState, routes []*Route, limit
 		path, _ := r.config.Egress(chosen)
 		evidence.EgressWeight = path.Weight
 		evidence.EgressActive = active[chosen]
+		evidence.EgressLoadUnits = work[chosen]
 		a := allocations[chosen]
 		evidence.EgressEffectiveWeight = a.Effective
 		evidence.EgressBaseWeight = a.Base
