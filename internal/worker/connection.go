@@ -163,6 +163,7 @@ func (g *Gateway) routeDownSnapshot(route *Route) int64 {
 func (g *Gateway) sampleSockets() {
 	type observation struct {
 		up, down int64
+		downBPS  int64
 		at       time.Time
 	}
 	observed := map[*Route]observation{}
@@ -201,15 +202,24 @@ func (g *Gateway) sampleSockets() {
 			for _, v := range routes {
 				up, down := v.BytesUp.Load(), v.BytesDown.Load()
 				previous, ok := observed[v]
+				var downBPS int64
 				if ok {
 					seconds := now.Sub(previous.at).Seconds()
 					if seconds > 0 {
 						v.TrafficUpBPS.Store(int64(float64(max(int64(0), up-previous.up)) / seconds))
-						v.TrafficDownBPS.Store(int64(float64(max(int64(0), down-previous.down)) / seconds))
+						downBPS = int64(float64(max(int64(0), down-previous.down)) / seconds)
+						v.TrafficDownBPS.Store(downBPS)
 						v.TrafficAt.Store(now.Unix())
+						if seconds <= 3 {
+							v.requestOnAggregateDrop(previous.downBPS, downBPS, now)
+						} else {
+							// A stalled observer is not fresh routing evidence.
+							v.TrafficAt.Store(0)
+							downBPS = 0
+						}
 					}
 				}
-				observed[v] = observation{up, down, now}
+				observed[v] = observation{up: up, down: down, downBPS: downBPS, at: now}
 				keep[v] = true
 			}
 			for v := range observed {

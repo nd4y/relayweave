@@ -87,6 +87,10 @@ The rate includes delivered user bytes from the same engine during the probe
 window, using synchronized kernel-counter snapshots. A busy path is therefore
 not judged solely by the probe's remaining share. Only probe bytes consume the
 probe allowance; existing user bytes are not extra measurement traffic.
+Fresh aggregate delivered goodput also raises routing estimates directly,
+without extra downloads. A lower value never overwrites active capacity.
+A large drop on a loaded path only requests an independent budgeted probe;
+stale/idle windows and probe cooldowns remain enforced.
 Background sampling is limited to
 automatic policies with a real choice of paths. After initial measurement,
 idle paths retain their allowance; activity or a detected change can request

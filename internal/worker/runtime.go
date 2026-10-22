@@ -971,11 +971,27 @@ func (v *Route) scoreObserved(mode string, evidence *topology.Candidate) float64
 		}
 		speed = max(speed, passive)
 	}
+	// A short active sample may still be in TCP slow start, and per-socket
+	// goodput is only one share of a busy path. The existing aggregate kernel
+	// counter window provides positive evidence without extra probe bytes.
+	aggregateUsed := false
+	aggregateAt := v.TrafficAt.Load()
+	if age := time.Now().Unix() - aggregateAt; age >= 0 && age <= 3 {
+		if aggregate := v.TrafficDownBPS.Load(); aggregate > speed {
+			speed = aggregate
+			passiveAt = aggregateAt
+			source = "delivered_lower_bound"
+			aggregateUsed = true
+		}
+	}
 	record := func() {
 		if evidence == nil {
 			return
 		}
 		*evidence = topology.Candidate{Egress: v.Config.EgressID, Route: v.Config.ID, Engine: v.Config.Core, Active: active, Reason: "compared", SpeedBPS: probeSpeed, MeasurementAt: probeAt, EffectiveRTTMS: rtt, ConsecutiveFailures: failures, ErrorEWMA: errors, SpeedUsedBPS: usedSpeed, SpeedSource: source, PassiveAt: passiveAt, CeilingBPS: v.CeilingBPS, Formula: formula}
+		if aggregateUsed && usedSpeed > 0 {
+			evidence.Factors = append(evidence.Factors, "aggregate_delivered_lower_bound")
+		}
 		if fallbackRTT {
 			evidence.Factors = append(evidence.Factors, "insufficient_observation")
 		}

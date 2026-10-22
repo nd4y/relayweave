@@ -50,6 +50,16 @@ func (r *Route) recordDeliveredRate(bps int64, receiveWindow uint32, now time.Ti
 	}
 }
 
+// A loaded path losing most of its aggregate delivery warrants confirmation,
+// not an immediate capacity downgrade. Ignore idle/tiny counter windows and
+// honour the same cooldown, serialized probes and durable shared allowance.
+func (r *Route) requestOnAggregateDrop(previous, current int64, now time.Time) {
+	if r.Active.Load() > 0 && current >= 1<<20 && previous/4 > current &&
+		now.Unix()-r.LastSpeed.Load() > 30 && now.Unix() >= r.ProbeNotBefore.Load() {
+		r.requestCapacityProbe(now.Unix())
+	}
+}
+
 func (r *Runtime) capacityConfirmed(policyID string, route *Route, previous, since int64) {
 	current := route.SpeedBPS.Load()
 	if previous <= 0 || current <= 0 {
