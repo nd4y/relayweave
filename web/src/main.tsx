@@ -767,7 +767,11 @@ function App() {
         .map((row) => row.item),
     [searchIndex, deferredSearch],
   );
-  const sourceRollovers = (v: Item): any[] => (overview?.workers || []).filter((w: any) => w.online).flatMap((w: any) => w.status?.rollovers || []).filter((p: any) => p.source_id === v.id);
+  const sourceRollovers = (v: Item): any[] =>
+    (overview?.workers || [])
+      .filter((w: any) => w.online)
+      .flatMap((w: any) => w.status?.rollovers || [])
+      .filter((p: any) => p.source_id === v.id);
   const sourceStatus = (v: Item) => {
     const d = v.data;
     if (!d.enabled) return { label: "Выключена", color: "default" as const };
@@ -778,14 +782,37 @@ function App() {
       (d.quota.upload || 0) + (d.quota.download || 0) >= d.quota.total
     )
       return { label: "Квота исчерпана", color: "warning" as const };
-    if (d.last_error === "partially_updated") return { label: "Частично обновлена", color: "warning" as const };
-    if (d.last_error === "rotation_waiting_drain") return { label: "Ожидаем завершения старых сессий", color: "info" as const };
-    if ((overview?.workers || []).some((w: any) => w.online && (w.status?.waiting_sources || []).includes(v.id))) return { label: "Подбираем работающие пути", color: "info" as const };
+    if (d.last_error === "partially_updated")
+      return { label: "Частично обновлена", color: "warning" as const };
+    if (d.last_error === "rotation_waiting_drain")
+      return {
+        label: "Ожидаем завершения старых сессий",
+        color: "info" as const,
+      };
+    if (
+      (overview?.workers || []).some(
+        (w: any) =>
+          w.online && (w.status?.waiting_sources || []).includes(v.id),
+      )
+    )
+      return { label: "Подбираем работающие пути", color: "info" as const };
     const plans = sourceRollovers(v);
-    if (plans.some((p: any) => p.state === "warming")) return { label: "Проверяем новые адреса", color: "info" as const };
-    if (plans.some((p: any) => p.state === "canary")) return { label: "Плавно переключаем соединения", color: "info" as const };
-    if (plans.some((p: any) => p.state === "active_draining" && p.old_active > 0)) return { label: "Новые адреса активны, старые сессии завершаются", color: "info" as const };
-    if (plans.some((p: any) => ["paused", "rolled_back"].includes(p.state))) return { label: "Обновление отложено, повторим автоматически", color: "warning" as const };
+    if (plans.some((p: any) => p.state === "warming"))
+      return { label: "Проверяем новые адреса", color: "info" as const };
+    if (plans.some((p: any) => p.state === "canary"))
+      return { label: "Плавно переключаем соединения", color: "info" as const };
+    if (
+      plans.some((p: any) => p.state === "active_draining" && p.old_active > 0)
+    )
+      return {
+        label: "Новые адреса активны, старые сессии завершаются",
+        color: "info" as const,
+      };
+    if (plans.some((p: any) => ["paused", "rolled_back"].includes(p.state)))
+      return {
+        label: "Обновление отложено, повторим автоматически",
+        color: "warning" as const,
+      };
     if (d.pending_snapshot)
       return { label: "Нужна проверка", color: "warning" as const };
     if (d.last_error)
@@ -820,7 +847,10 @@ function App() {
           }}
         />
       ) : (
-        <Box className="rw-auth-shell" sx={{ display: "flex", minHeight: "100vh" }}>
+        <Box
+          className="rw-auth-shell"
+          sx={{ display: "flex", minHeight: "100vh" }}
+        >
           <Drawer
             variant="permanent"
             sx={{
@@ -1388,7 +1418,9 @@ function App() {
                                     color="text.secondary"
                                     sx={{ mt: 2, overflowWrap: "anywhere" }}
                                   >
-                                    {item.data.update_policy === "review_only" ? "Обновления с проверкой владельца" : "Автоматический выбор профилей и весов"}
+                                    {item.data.update_policy === "review_only"
+                                      ? "Обновления с проверкой владельца"
+                                      : "Автоматический выбор профилей и весов"}
                                   </Typography>
                                   <Stack
                                     direction="row"
@@ -1402,7 +1434,14 @@ function App() {
                                       label={sourceStatus(item).label}
                                       color={sourceStatus(item).color}
                                       variant="outlined"
-                                      sx={{ maxWidth: "100%", height: "auto", "& .MuiChip-label": { whiteSpace: "normal", py: 0.25 } }}
+                                      sx={{
+                                        maxWidth: "100%",
+                                        height: "auto",
+                                        "& .MuiChip-label": {
+                                          whiteSpace: "normal",
+                                          py: 0.25,
+                                        },
+                                      }}
                                     />
                                     <Typography variant="body2">
                                       {countRu(
@@ -1419,7 +1458,8 @@ function App() {
                                     display="block"
                                     mt={1.5}
                                   >
-                                    Каталог: {ago(item.data.last_success)} · Получено: {ago(item.data.last_fetched)} ·
+                                    Каталог: {ago(item.data.last_success)} ·
+                                    Получено: {ago(item.data.last_fetched)} ·
                                     Xray {item.data.core_version}
                                   </Typography>
                                   {item.data.last_error && (
@@ -1661,7 +1701,12 @@ function App() {
                                             text: "Это изменение требует решения из-за состава или параметров безопасности. Перед принятием проверьте разницу. Разрешение относится только к показанному снимку.",
                                             action: async () => {
                                               await operate(
-                                                `sources/${item.id}/approve`, { pending_snapshot: item.data.pending_snapshot, source_version: item.version },
+                                                `sources/${item.id}/approve`,
+                                                {
+                                                  pending_snapshot:
+                                                    item.data.pending_snapshot,
+                                                  source_version: item.version,
+                                                },
                                               );
                                             },
                                           })
@@ -2123,7 +2168,8 @@ function App() {
                     {preview.diff.removed} · Изменено подключений:{" "}
                     {preview.diff.credentials_changed} · Транспорт и протокол:{" "}
                     {preview.diff.parameters_changed || 0} · Сохранено:{" "}
-                    {preview.diff.retained} · Безопасных смен адреса: {preview.diff.address_rotations || 0}
+                    {preview.diff.retained} · Безопасных смен адреса:{" "}
+                    {preview.diff.address_rotations || 0}
                     {preview.diff.ambiguous > 0
                       ? ` · Неоднозначных совпадений: ${preview.diff.ambiguous}`
                       : ""}

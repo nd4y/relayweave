@@ -132,13 +132,19 @@ func (r *Runtime) selectFallbackEgressLocked(p *policyState, routes []*Route, d 
 	profile := routes[0].Config.Profile()
 	variants := []*Route{}
 	for _, v := range routes {
-		if v.Config.Profile() == profile { variants = append(variants, v) }
+		if v.Config.Profile() == profile {
+			variants = append(variants, v)
+		}
 	}
 	result := r.selectEgressLimitLocked(p, variants, len(variants), d)
 	seen := map[*Route]bool{}
-	for _, v := range result { seen[v] = true }
+	for _, v := range result {
+		seen[v] = true
+	}
 	for _, v := range routes {
-		if !seen[v] && r.egressEnabledLocked(v.Config.EgressID) && !r.telemetryDownLocked(v.Config.EgressID, time.Now()) { result = append(result, v) }
+		if !seen[v] && r.egressEnabledLocked(v.Config.EgressID) && !r.telemetryDownLocked(v.Config.EgressID, time.Now()) {
+			result = append(result, v)
+		}
 	}
 	return result
 }
