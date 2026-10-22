@@ -6,6 +6,7 @@ import (
 )
 
 type pathRollover struct {
+	qualityCache                     rolloverQualityCache
 	quality                          *rolloverQuality
 	serial, durableSerial            uint64
 	old, next                        *Route
@@ -101,6 +102,12 @@ func (r *Runtime) advanceRolloversLocked(now time.Time) {
 			continue
 		}
 		if !p.next.Instance.Ready.Load() {
+			continue
+		}
+		if p.next.Config.CheckServer && (p.state == "warming" || p.state == "canary") && (r.drained.Load() || time.Now().Unix() > r.lease.Load() || !r.permitted("", p.next.Config)) {
+			p.state = "paused"
+			p.reason = "candidate_authorization_changed"
+			p.retryAt = now.Add(5 * time.Minute)
 			continue
 		}
 		if (p.state == "warming" || p.state == "canary") && now.Sub(p.started) > 30*time.Minute {
@@ -199,7 +206,7 @@ func (r *Runtime) rolloverStatusLocked() []map[string]any {
 		out = append(out, map[string]any{"source_id": strings.SplitN(p.next.Config.CapacityGroup, "/", 2)[0], "route": id, "egress": p.next.Config.EgressID, "state": p.state, "reason": p.reason, "new_admission_percent": share, "successful_sessions": p.success, "failed_sessions": p.failed, "old_active": p.old.Active.Load(), "udp_ready": udpProven(p.next), "started_at": p.started, "stage_started_at": p.changed, "next_retry_at": p.retryAt})
 		if p.next.Config.CheckServer {
 			v := r.qualityVerdictLocked(p, time.Now())
-			out[len(out)-1]["quality"] = map[string]any{"mode": v.Mode, "reason": v.Reason, "confidence": v.Confidence, "samples": v.Samples, "paired_samples": v.PairedSamples, "bulk_state": v.BulkState, "bulk_ratio": v.BulkRatio}
+			out[len(out)-1]["quality"] = map[string]any{"mode": v.Mode, "reason": v.Reason, "confidence": v.Confidence, "samples": v.Samples, "paired_samples": v.PairedSamples, "bulk_state": v.BulkState, "bulk_ratio": v.BulkRatio, "connect_metric": "adapter_open_tcp"}
 		}
 	}
 	return out

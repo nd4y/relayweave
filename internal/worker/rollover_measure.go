@@ -79,6 +79,8 @@ func pairedBulkTarget(raw string) (string, bool) {
 // Only this controlled request's headers define TTFB. No application TLS bytes
 // are inspected. Core/proxy framing and kernel in-flight data remain distinct
 // from a capped probe payload reservation and are not advertised as wire totals.
+// ConnectUS times Adapter.OpenTCP (including its local proxy handshake), not a
+// separately observed end-to-end origin TCP connection establishment.
 func measureRolloverHTTP(ctx context.Context, route *Route, target string, bulk bool, timeout time.Duration) qualityMeasurement {
 	m := qualityMeasurement{}
 	if route == nil || route.Instance == nil {

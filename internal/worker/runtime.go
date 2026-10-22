@@ -53,6 +53,8 @@ type policyState struct {
 	egressCredit     map[string]float64
 }
 type Runtime struct {
+	qualityEpoch     uint64
+	qualityAuthority map[string]qualityAuthority
 	restoreRollovers []rolloverRecord
 	rolloverDirty    atomic.Bool
 	rollovers        map[string]*pathRollover
@@ -135,9 +137,11 @@ func (r *Runtime) Restrict(c config.Config) {
 	allowed := map[string]map[string]string{}
 	routes := map[string]string{}
 	expiry := map[string]time.Time{}
+	authority := map[string]qualityAuthority{}
 	for _, v := range c.Routes {
 		routes[v.ID] = fingerprint(v)
 		expiry[v.ID] = v.ValidUntil
+		authority[v.ID] = qualityAuthority{Current: v.Fingerprint, Until: v.ValidUntil, Previous: append([]config.RevisionPermit(nil), v.Previous...), EstablishedOnly: v.EstablishedOnly}
 	}
 	for _, p := range c.Policies {
 		m := map[string]string{}
@@ -147,6 +151,7 @@ func (r *Runtime) Restrict(c config.Config) {
 		allowed[p.ID] = m
 	}
 	r.mu.Lock()
+	r.invalidateQualityConfigLocked(allowed, authority)
 	r.constraints = &c
 	r.allowed = allowed
 	r.hardExpiry = expiry
@@ -476,6 +481,7 @@ func (r *Runtime) Apply(ctx context.Context, c config.Config, g *Gateway) error 
 	}
 	r.mu.Lock()
 	r.config = c
+	r.qualityEpoch++
 	previousCurrent := r.current
 	r.current = prepared
 	r.installRolloversLocked(previousCurrent, time.Now())
