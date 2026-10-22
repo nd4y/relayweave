@@ -308,6 +308,15 @@ type registerResponse struct {
 	Session string `json:"session"`
 }
 
+// An authenticated peer cannot avoid quarantine by disconnecting after sending
+// an invalid result. Accounting has its own bounded lifetime, and must commit
+// before the protocol rejection is returned.
+func (c *Controller) recordInvalidResult(r *http.Request, id string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), time.Second)
+	defer cancel()
+	return c.Repo.InvalidResult(ctx, id)
+}
+
 func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" || len(r.RequestURI) > 64 {
 		http.Error(w, "compute_invalid_path", 400)
@@ -348,13 +357,26 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "compute_owner_unavailable", 503)
 		return
 	}
+	isResult := r.URL.Path == "/compute/v1/result" || r.URL.Path == "/compute/v1/cancelled"
+	rejectBody := func(reason string, code int) {
+		if isResult && c.recordInvalidResult(r, id) != nil {
+			http.Error(w, "compute_authority_unavailable", 503)
+			return
+		}
+		http.Error(w, reason, code)
+	}
 	if r.Header.Get("Content-Encoding") != "" {
-		http.Error(w, "compute_compression_disabled", 400)
+		rejectBody("compute_compression_disabled", 400)
 		return
 	}
 	raw, e := io.ReadAll(io.LimitReader(r.Body, (32<<10)+1))
-	if e != nil || len(raw) > 32<<10 {
+	if e != nil {
+		// A failed/partial upload is a transport failure, not an invalid result.
 		http.Error(w, "compute_body_limit", 413)
+		return
+	}
+	if len(raw) > 32<<10 {
+		rejectBody("compute_body_limit", 413)
 		return
 	}
 	var response any
@@ -460,9 +482,6 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		var s Snapshot
 		s, e = c.Repo.Accept(ctx, c.Epoch.Load(), id, token, result)
-		if errors.Is(e, ErrInvalid) {
-			_ = c.Repo.InvalidResult(ctx, id)
-		}
 		if e == nil && result.Status == "ok" && result.Candidate.ID != 0 {
 			_, e = c.Repo.Publish(ctx, c.Epoch.Load(), s, result.Candidate, c.KeyID, c.Key)
 		}
@@ -470,6 +489,12 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 		return
+	}
+	if isResult && errors.Is(e, ErrInvalid) {
+		if c.recordInvalidResult(r, id) != nil {
+			http.Error(w, "compute_authority_unavailable", 503)
+			return
+		}
 	}
 	if e != nil {
 		switch {
