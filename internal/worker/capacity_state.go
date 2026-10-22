@@ -44,9 +44,9 @@ func (r *Runtime) capacityBudgetStatusLocked(now time.Time) map[string]any {
 	globalRemaining := max(int64(0), ceiling-total)
 	remaining := max(int64(0), min(ceiling/2-capacity, globalRemaining))
 	reason := "available"
-	if remaining < 8<<20 {
+	if remaining < automaticCapacityProbeBytes {
 		reason = "capacity_share_exhausted"
-		if globalRemaining < 8<<20 {
+		if globalRemaining < automaticCapacityProbeBytes {
 			reason = "global_budget_exhausted"
 		}
 	}

@@ -4,6 +4,10 @@ import "time"
 
 const capacityRefreshSeconds = 300
 
+// Short background samples leave room for revalidation and many profiles.
+// Manual tests retain their existing8MiB bound; both paths reserve before I/O.
+const automaticCapacityProbeBytes int64 = 1 << 20
+
 // Preserve the first observation of a possible change across a probe round.
 // Alternatives already measured after that observation need no repeat probe.
 func (r *Route) requestCapacityProbe(since int64) {

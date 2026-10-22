@@ -68,3 +68,26 @@ Remaining limits include the session-count load approximation, heuristic
 capacity priors and mandatory review of some subscription changes. Routine
 subscription rollover and advanced traffic classification remain independent
 acceptance work; do not call the entire product complete based on this selector.
+
+## Probe accounting and restart behavior
+
+The daily ceiling is shared across all policies and survives a worker restart.
+Capacity probes may consume at most half of that ceiling; the remaining share
+protects eligibility, UDP and rollover checks. Purpose accounting distinguishes
+capacity reservations from those other checks without refunding any bytes or
+increasing the shared limit. Existing journals without a purpose breakdown are
+treated conservatively: all their unclassified spending counts against the
+capacity allowance until the next UTC day. Explicit manual speed tests retain
+their previous8MiB bound and shared daily limit.
+
+Automatic speed probes reserve and read at most1MiB per sample, before I/O,
+with the existing3second bound. The result is a bounded single observation,
+not a guarantee of WAN capacity. Global and capacity-share remaining bytes and
+the reason a background probe is blocked are available in worker status;
+Prometheus exports the corresponding reservation/remaining-byte counters.
+
+Fresh active speed estimates survive encrypted worker restarts for at most
+15minutes. They match the same engine content/core digest, checked proxy IP,
+ISP source address and reference target. Expired, future or mismatched entries
+are ignored. A restored estimate does not grant health, routing permission or
+admission and never makes a passive lower bound an upper capacity claim.

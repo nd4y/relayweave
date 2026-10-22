@@ -79,6 +79,9 @@ func (a *Agent) test(ctx context.Context, command wire.Command) (any, error) {
 		}
 		targetURL = body.SpeedURL
 		limit = 8 << 20
+		if body.Automatic {
+			limit = automaticCapacityProbeBytes
+		}
 		budget := body.Budget
 		if budget <= 0 {
 			budget = 128 << 20
@@ -271,16 +274,16 @@ func (a *Agent) adaptiveProbes() {
 			choices := []candidate{}
 			seen := map[string]bool{}
 			for _, p := range cfg.Policies {
-				// Automatic throughput bursts may use only the first half of
-				// the shared daily budget. Preserve the other half for health.
+				// Capacity reservations have their own half-share inside the
+				// unchanged global cap, independently of quality/UDP spending.
 				a.runtime.mu.RLock()
 				reserved := a.runtime.capacityReservedLocked(now)
 				ceiling := a.runtime.probeCeilingLocked(p.ProbeBudgetBytes)
 				a.runtime.mu.RUnlock()
-				if reserved+(8<<20) > ceiling/2 {
+				if reserved+automaticCapacityProbeBytes > ceiling/2 {
 					continue
 				}
-				if p.SpeedURL != "" && p.ProbeBudgetBytes >= 8<<20 {
+				if p.SpeedURL != "" && p.ProbeBudgetBytes >= automaticCapacityProbeBytes {
 					for _, route := range a.runtime.Candidates("policy:" + p.ID) {
 						attempt, requested := route.LastProbeAttempt.Load(), route.ProbeRequestedAt.Load()
 						if seen[route.Config.ID] || now.Unix()-attempt < 30 || now.Unix() < route.ProbeNotBefore.Load() {
