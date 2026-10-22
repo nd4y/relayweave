@@ -16,6 +16,7 @@ func (r *Runtime) RestrictLiveGuard(guard config.LiveGuard) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.liveGuard == nil || copy.Version > r.liveGuard.Version {
+		r.invalidateQualityGuardLocked(copy)
 		r.liveGuard = &copy
 	}
 }

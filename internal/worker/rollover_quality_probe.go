@@ -87,18 +87,6 @@ func (r *Runtime) qualitySpecLocked(plan *pathRollover) (rolloverQualitySpec, bo
 	return spec, true
 }
 
-func (r *Runtime) qualityVerdictLocked(plan *pathRollover, now time.Time) qualityVerdict {
-	spec, ok := r.qualitySpecLocked(plan)
-	if !ok || plan.quality == nil || plan.quality.Signature != spec.Signature {
-		return qualityVerdict{Reason: "waiting_quality_samples", Mode: "evaluating", Confidence: "insufficient", BulkState: "waiting"}
-	}
-	v := plan.quality.evaluate(now, spec.SpeedConfigured, spec.SpeedDisabled)
-	if !v.Allow && !v.Pause && plan.quality.Reason != "" {
-		v.Reason = plan.quality.Reason
-	}
-	return v
-}
-
 // UDP warmup/freshness has priority over optional quality measurements. A failed
 // UDP capability with its bounded backoff does not starve healthy TCP quality.
 func (r *Runtime) qualityUDPHasPriorityLocked(now time.Time) bool {
@@ -163,12 +151,13 @@ func (a *Agent) probeRolloverQuality(ctx context.Context) {
 			if !p.next.Config.CheckServer || (p.state != "warming" && p.state != "canary") || !r.revisionReadyForAdmissionLocked(p.next, now) || r.establishedOnlyLocked(p.next.Config) {
 				continue
 			}
-			candidate, ok := r.qualitySpecLocked(p)
+			candidate, ok := r.prepareQualityCacheLocked(p, now)
 			if !ok || !r.permitted(candidate.Policy, p.next.Config) {
 				continue
 			}
 			if p.quality == nil || p.quality.Signature != candidate.Signature {
 				p.quality = &rolloverQuality{Signature: candidate.Signature}
+				r.refreshQualityVerdictLocked(p, now)
 			}
 			q := p.quality
 			gap := 10 * time.Second
@@ -189,6 +178,7 @@ func (a *Agent) probeRolloverQuality(ctx context.Context) {
 		return
 	}
 	q := plan.quality
+	epoch := r.qualityEpoch
 	verdict := q.evaluate(now, spec.SpeedConfigured, spec.SpeedDisabled)
 	bulk := !spec.SpeedDisabled && spec.SpeedConfigured && verdict.Samples >= 3 && (q.LastBulk.IsZero() || now.Sub(q.LastBulk) >= 30*time.Second || verdict.Reason == "waiting_bulk_recheck")
 	if !bulk && len(spec.Targets) == 0 {
@@ -240,13 +230,11 @@ func (a *Agent) probeRolloverQuality(ctx context.Context) {
 	finish := func(reason string, pair *qualityPair) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		current := r.rollovers[plan.next.Config.ID]
-		latest, ok := r.qualitySpecLocked(plan)
-		if current != plan || plan.quality != q || !ok || latest.Signature != spec.Signature {
+		if !r.finishQualityAttemptLocked(plan, q, epoch, spec, time.Now()) {
 			return
 		}
-		q.InFlight = false
-		if !r.permitted(spec.Policy, plan.next.Config) {
+		defer func() { r.refreshQualityVerdictLocked(plan, time.Now()) }()
+		if ctx.Err() != nil || r.drained.Load() || time.Now().Unix() > r.lease.Load() || !r.permitted(spec.Policy, plan.next.Config) {
 			q.Reason = "quality_authorization_changed"
 			return
 		}
@@ -275,7 +263,7 @@ func (a *Agent) probeRolloverQuality(ctx context.Context) {
 	}
 	r.mu.Lock()
 	latest, ok := r.qualitySpecLocked(plan)
-	reserved := ok && latest.Signature == spec.Signature && r.rollovers[plan.next.Config.ID] == plan && r.permitted(spec.Policy, plan.next.Config) && r.reserveProbeLocked(now, spec.Policy, perPath*paths, latest.Budget)
+	reserved := ok && r.qualityEpoch == epoch && latest.Signature == spec.Signature && r.rollovers[plan.next.Config.ID] == plan && r.permitted(spec.Policy, plan.next.Config) && r.reserveProbeLocked(now, spec.Policy, perPath*paths, latest.Budget)
 	r.mu.Unlock()
 	if !reserved {
 		finish("waiting_budget", nil)
@@ -292,7 +280,7 @@ func (a *Agent) probeRolloverQuality(ctx context.Context) {
 	// measurement merely because its earlier reservation was authorized.
 	r.mu.RLock()
 	latest, ok = r.qualitySpecLocked(plan)
-	allowed := ctx.Err() == nil && ok && latest.Signature == spec.Signature && r.rollovers[plan.next.Config.ID] == plan && r.permitted(spec.Policy, plan.next.Config) && (!oldAllowed || r.permitted(spec.Policy, plan.old.Config)) && !r.drained.Load() && time.Now().Unix() <= r.lease.Load()
+	allowed := ctx.Err() == nil && ok && r.qualityEpoch == epoch && latest.Signature == spec.Signature && r.rollovers[plan.next.Config.ID] == plan && r.permitted(spec.Policy, plan.next.Config) && (!oldAllowed || r.permitted(spec.Policy, plan.old.Config)) && !r.drained.Load() && time.Now().Unix() <= r.lease.Load()
 	r.mu.RUnlock()
 	if !allowed {
 		finish("quality_authorization_changed", nil)

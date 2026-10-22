@@ -139,6 +139,7 @@ func TestMissingBaselineCannotBypassQualityCohortAndCaps(t *testing.T) {
 		p.quality.Samples[i].OldEligible = false
 		p.quality.Samples[i].Old.OK = false
 	}
+	r.prepareQualityCacheLocked(p, now)
 	count := 0
 	for range 100 {
 		if ticket, err := r.reserveRoute("policy:p", p.next); err == nil {
