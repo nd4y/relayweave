@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"net"
+	"net/url"
 	"proxyplatform/internal/config"
 	"sort"
 	"time"
@@ -29,16 +31,23 @@ func (r *Runtime) qualitySpecLocked(plan *pathRollover) (rolloverQualitySpec, bo
 	}
 	ids := []string{}
 	policies := map[string]config.Policy{}
+	ranks := map[string]int{}
 	for _, p := range cfg.Policies {
 		for _, route := range p.Routes {
-			if route == plan.next.Config.ID {
+			if route == plan.next.Config.ID && r.permitted(p.ID, plan.next.Config) {
 				ids = append(ids, p.ID)
 				policies[p.ID] = p
+				ranks[p.ID] = qualityPolicyRank(cfg, p)
 				break
 			}
 		}
 	}
-	sort.Strings(ids)
+	sort.Slice(ids, func(i, j int) bool {
+		if ranks[ids[i]] != ranks[ids[j]] {
+			return ranks[ids[i]] < ranks[ids[j]]
+		}
+		return ids[i] < ids[j]
+	})
 	if len(ids) == 0 {
 		return rolloverQualitySpec{}, false
 	}
@@ -85,6 +94,53 @@ func (r *Runtime) qualitySpecLocked(plan *pathRollover) (rolloverQualitySpec, bo
 	encoded, _ := json.Marshal(identity)
 	spec.Signature = sha256.Sum256(encoded)
 	return spec, true
+}
+
+func qualityTargetConfigured(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.User != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	port := u.Port()
+	if port == "" {
+		port = "80"
+		if u.Scheme == "https" {
+			port = "443"
+		}
+	}
+	return !forbiddenTarget(net.JoinHostPort(u.Hostname(), port))
+}
+
+// Choose a stable, authorized measurement policy, not the first route pin by
+// catalogue order/name. DisableSpeedProbes is scoped to the selected policy;
+// a separately authorized speed-enabled policy can measure the same route.
+// Ranking uses configured pair capacity, never refunds/borrows spent budget.
+// Actual remaining/shared caps are still checked atomically on reservation.
+func qualityPolicyRank(cfg config.Config, p config.Policy) int {
+	targets := append([]string{p.ProbeURL}, p.ProbeFallbackURLs...)
+	if p.ProbeURL == "" {
+		targets = append([]string{cfg.ProbeURL}, cfg.ProbeFallbackURLs...)
+	}
+	health := false
+	for _, target := range targets {
+		health = health || qualityTargetConfigured(target)
+	}
+	if !health {
+		return 5
+	}
+	if !p.DisableSpeedProbes && qualityTargetConfigured(p.SpeedURL) && p.ProbeBudgetBytes >= 2*qualityBulkReserve {
+		return 0
+	}
+	if p.DisableSpeedProbes && p.ProbeBudgetBytes >= 2*qualityHTTPReserve {
+		return 1
+	}
+	if !p.DisableSpeedProbes && qualityTargetConfigured(p.SpeedURL) {
+		return 2
+	}
+	if p.DisableSpeedProbes {
+		return 3
+	}
+	return 4
 }
 
 // UDP warmup/freshness has priority over optional quality measurements. A failed
