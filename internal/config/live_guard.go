@@ -85,3 +85,20 @@ func (g LiveGuard) Legacy() LiveGuard {
 	}
 	return out
 }
+
+// Version2 understands revision continuation but not the quality contract.
+// Preserve its frozen existing-session grants while stopping new tickets until
+// upgrade. Version1 receives only its conservative, single-fingerprint schema.
+func (g LiveGuard) ForRoutingVersion(version int) LiveGuard {
+	if version < 2 {
+		return g.Legacy()
+	}
+	out := g.Clone()
+	if version < 3 {
+		for id, permit := range out.Routes {
+			permit.EstablishedOnly = true
+			out.Routes[id] = permit
+		}
+	}
+	return out
+}

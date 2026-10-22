@@ -165,6 +165,23 @@ func (a *Agent) test(ctx context.Context, command wire.Command) (any, error) {
 func (r *Runtime) reserveProbe(now time.Time, key string, size, budget int64) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.reserveProbeLocked(now, key, size, budget)
+}
+
+func (r *Runtime) reserveProbeLocked(now time.Time, key string, size, budget int64) bool {
+	if size <= 0 || budget <= 0 {
+		return false
+	}
+	// A reservation captured before Restrict must respect the current lower cap.
+	policies := r.config.Policies
+	if r.constraints != nil {
+		policies = r.constraints.Policies
+	}
+	for _, p := range policies {
+		if p.ID == key {
+			budget = min(budget, p.ProbeBudgetBytes)
+		}
+	}
 	if r.probeWindow.IsZero() || !now.Before(r.probeWindow.UTC().Truncate(24*time.Hour).Add(24*time.Hour)) {
 		r.probeWindow = now.UTC().Truncate(24 * time.Hour)
 		r.budget = map[string]int64{}
@@ -173,14 +190,14 @@ func (r *Runtime) reserveProbe(now time.Time, key string, size, budget int64) bo
 		r.budget = map[string]int64{}
 	}
 	ceiling := budget
-	for _, p := range r.config.Policies {
+	for _, p := range policies {
 		ceiling = max(ceiling, p.ProbeBudgetBytes)
 	}
 	var total int64
 	for _, n := range r.budget {
 		total += n
 	}
-	if r.budget[key]+size > budget || total+size > ceiling {
+	if size > budget || r.budget[key] > budget-size || size > ceiling || total > ceiling-size {
 		return false
 	}
 	r.budget[key] += size

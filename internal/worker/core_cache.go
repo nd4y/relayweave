@@ -9,6 +9,7 @@ import (
 
 	"proxyplatform/internal/config"
 	"proxyplatform/internal/core"
+	"proxyplatform/internal/wire"
 )
 
 func (a *Agent) protectedArtifacts() (map[string][]string, error) {
@@ -51,13 +52,12 @@ func (a *Agent) protectedArtifacts() (map[string][]string, error) {
 	if a.aead == nil || len(b) <= a.aead.NonceSize() {
 		return nil, fmt.Errorf("artifact_cache_recovery_unreadable")
 	}
-	n := a.aead.NonceSize()
-	plain, err := a.aead.Open(nil, b[:n], b[n:], []byte("relayweave-worker-v1"))
+	plain, _, err := a.openWorkerPayload(b, workerStateDomain, "relayweave-worker-v1")
 	if err != nil {
 		return nil, fmt.Errorf("artifact_cache_recovery_unreadable")
 	}
 	var state savedState
-	if json.Unmarshal(plain, &state) != nil {
+	if json.Unmarshal(plain, &state) != nil || state.RoutingVersion > wire.RoutingVersion {
 		return nil, fmt.Errorf("artifact_cache_recovery_unreadable")
 	}
 	add(state.Config, "previous_good")

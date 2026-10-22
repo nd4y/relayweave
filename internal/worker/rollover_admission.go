@@ -24,7 +24,7 @@ func (r *Runtime) safeRevisionAdmissionLocked(v *Route, now time.Time) *Route {
 		return nil
 	}
 	plan := r.rollovers[v.Config.ID]
-	failed := plan != nil && plan.next == v && plan.failed >= 5
+	failed := plan != nil && plan.next == v && (plan.failed >= 5 || (plan.quality != nil && plan.quality.Blocked))
 	if !failed && r.revisionReadyForAdmissionLocked(v, now) {
 		return v
 	}

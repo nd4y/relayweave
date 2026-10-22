@@ -260,7 +260,7 @@ func (s *Server) compile(ctx context.Context, generation int64, blueprint map[st
 		if len(profiles) == 0 {
 			warnings = append(warnings, "no_eligible_profiles:"+po.ID)
 		}
-		cp := config.Policy{ID: po.ID, Mode: policy.Mode, StickySeconds: policy.StickySeconds, RotationSeconds: policy.RotationSeconds, ProbeIntervalSeconds: policy.ProbeIntervalSeconds, ProbeURL: policy.ProbeURL, ProbeScope: policy.ProbeScope, SpeedURL: policy.SpeedURL, ProbeBudgetBytes: policy.ProbeBudgetBytes, ActivePaths: policy.ActivePaths, WarmReserve: policy.WarmReserve, MaxConnections: policy.MaxConnections, ConnectTimeoutMS: policy.ConnectTimeoutMS}
+		cp := config.Policy{DisableSpeedProbes: policy.DisableSpeedProbes, ID: po.ID, Mode: policy.Mode, StickySeconds: policy.StickySeconds, RotationSeconds: policy.RotationSeconds, ProbeIntervalSeconds: policy.ProbeIntervalSeconds, ProbeURL: policy.ProbeURL, ProbeScope: policy.ProbeScope, SpeedURL: policy.SpeedURL, ProbeBudgetBytes: policy.ProbeBudgetBytes, ActivePaths: policy.ActivePaths, WarmReserve: policy.WarmReserve, MaxConnections: policy.MaxConnections, ConnectTimeoutMS: policy.ConnectTimeoutMS}
 		cp.ProbeFallbackURLs = policy.ProbeFallbackURLs
 		for _, profileObject := range profiles {
 			p, _ := catalog.Decode[catalog.Profile](profileObject.Data)

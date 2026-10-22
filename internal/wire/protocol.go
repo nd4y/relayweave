@@ -16,6 +16,8 @@ import (
 
 type Codec struct{}
 
+const RoutingVersion = 3
+
 func (Codec) Name() string                    { return "relayweave-json" }
 func (Codec) Marshal(v any) ([]byte, error)   { return json.Marshal(v) }
 func (Codec) Unmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }

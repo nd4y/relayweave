@@ -39,8 +39,8 @@ func (s *Server) Admission(ctx context.Context, request *wire.AdmissionRequest) 
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, "admission fence unavailable")
 	}
-	if guard != nil && request.RoutingVersion < 2 {
-		projected := guard.Legacy()
+	if guard != nil && request.RoutingVersion < wire.RoutingVersion {
+		projected := guard.ForRoutingVersion(request.RoutingVersion)
 		guard = &projected
 	}
 	return &wire.AdmissionResponse{LiveGuard: guard}, nil
@@ -87,8 +87,8 @@ func (s *Server) Sync(ctx context.Context, hello *wire.Hello) (*wire.Assignment,
 	}
 	assignment := &wire.Assignment{LeaseUntil: time.Now().Add(time.Duration(settings.OfflineLeaseSeconds) * time.Second)}
 	assignment.LiveGuard, e = s.liveGuard(ctx, hello.GuardVersion)
-	if assignment.LiveGuard != nil && hello.RoutingVersion < 2 {
-		projected := assignment.LiveGuard.Legacy()
+	if assignment.LiveGuard != nil && hello.RoutingVersion < wire.RoutingVersion {
+		projected := assignment.LiveGuard.ForRoutingVersion(hello.RoutingVersion)
 		assignment.LiveGuard = &projected
 	}
 	if e != nil {
@@ -136,7 +136,7 @@ func (s *Server) Sync(ctx context.Context, hello *wire.Hello) (*wire.Assignment,
 			return nil, status.Error(codes.Internal, "revision corrupt")
 		}
 		revision.Config.LeaseUntil = assignment.LeaseUntil
-		if hello.RoutingVersion < 2 {
+		if hello.RoutingVersion < wire.RoutingVersion {
 			for _, route := range revision.Config.Routes {
 				if route.CheckServer || len(route.Previous) > 0 {
 					assignment.Message = "worker_routing_upgrade_required"

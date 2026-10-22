@@ -6,6 +6,7 @@ import (
 )
 
 type pathRollover struct {
+	quality                          *rolloverQuality
 	serial, durableSerial            uint64
 	old, next                        *Route
 	state, reason                    string
@@ -29,13 +30,16 @@ func (r *Runtime) installRolloversLocked(previous map[string]*engineEntry, now t
 		if old == nil || old == next {
 			continue
 		}
-		if !r.overlapAllowedLocked("", old.route.Config) {
-			continue
-		}
 		if plan := r.rollovers[id]; plan != nil && plan.next == next.route {
 			continue
 		}
-		r.rollovers[id] = &pathRollover{old: old.route, next: next.route, state: "warming", reason: "collecting_protocol_evidence", started: now, changed: now, serial: 1}
+		baseline := old.route
+		if prior := r.rollovers[id]; prior != nil && prior.state != "active_draining" && prior.state != "completed" {
+			// A superseded canary remains a drain-only engine through its refs;
+			// issuing a few tickets never makes it a last-known-good baseline.
+			baseline = prior.old
+		}
+		r.rollovers[id] = &pathRollover{old: baseline, next: next.route, state: "warming", reason: "collecting_protocol_evidence", started: now, changed: now, serial: 1}
 		r.rolloverDirty.Store(true)
 	}
 	for id, plan := range r.rollovers {
@@ -72,11 +76,6 @@ func (r *Runtime) advanceRolloversLocked(now time.Time) {
 				continue
 			}
 		}
-		if !r.overlapAllowedLocked("", p.old.Config) {
-			p.state = "active_draining"
-			p.reason = "old_authorization_expired"
-			continue
-		}
 		if p.state == "rolled_back" || p.state == "paused" {
 			if p.retryAt.IsZero() || now.Before(p.retryAt) {
 				continue
@@ -89,6 +88,7 @@ func (r *Runtime) advanceRolloversLocked(now time.Time) {
 			p.success = 0
 			p.step = 0
 			p.attempts++
+			p.quality = nil
 		}
 		if locallyFailedForAdmission(p.next) || p.failed >= 5 {
 			p.state = "rolled_back"
@@ -103,15 +103,33 @@ func (r *Runtime) advanceRolloversLocked(now time.Time) {
 		if !p.next.Instance.Ready.Load() {
 			continue
 		}
+		if (p.state == "warming" || p.state == "canary") && now.Sub(p.started) > 30*time.Minute {
+			p.state = "paused"
+			p.reason = "insufficient_samples"
+			p.retryAt = now.Add(5 * time.Minute)
+			continue
+		}
+		qualityReady := true
+		if p.next.Config.CheckServer && (p.state == "warming" || p.state == "canary") {
+			verdict := r.qualityVerdictLocked(p, now)
+			qualityReady = verdict.Allow
+			p.reason = verdict.Reason
+			if verdict.Pause || (p.quality != nil && p.quality.Blocked) {
+				p.state = "paused"
+				p.retryAt = now.Add(5 * time.Minute)
+				p.changed = now
+				continue
+			}
+		}
 		if p.state == "warming" {
-			if p.next.Instance.ProbeSamples.Load() < 3 || now.Sub(p.started) < 15*time.Second {
+			if p.next.Instance.ProbeSamples.Load() < 3 || now.Sub(p.started) < 15*time.Second || !qualityReady {
 				continue
 			}
 			p.state = "canary"
 			p.reason = "protocol_checks_passed"
 			p.changed = now
 		}
-		if p.state == "canary" && now.Sub(p.changed) >= 30*time.Second && p.success >= 20 && p.failed == 0 {
+		if p.state == "canary" && qualityReady && now.Sub(p.changed) >= 30*time.Second && p.success >= 20 && p.failed == 0 {
 			if p.next.Samples.Load() >= 20 && p.old.Samples.Load() >= 20 {
 				baseline := p.old.RTTUS.Load()
 				if p.next.RTTUS.Load() > baseline+max(baseline/5, 20000) {
@@ -146,9 +164,6 @@ func (r *Runtime) chooseRevisionLocked(v *Route, now time.Time) *Route {
 	if p.durableSerial < p.serial {
 		return p.old
 	}
-	if !r.overlapAllowedLocked("", p.old.Config) || !p.old.Instance.Ready.Load() {
-		return p.next
-	}
 	if p.state == "warming" || p.state == "paused" || p.state == "rolled_back" {
 		return p.old
 	}
@@ -156,6 +171,9 @@ func (r *Runtime) chooseRevisionLocked(v *Route, now time.Time) *Route {
 		return p.next
 	}
 	if p.state == "canary" {
+		if p.next.Config.CheckServer && (p.quality == nil || p.quality.Blocked || !r.qualityVerdictLocked(p, now).Allow) {
+			return p.old
+		}
 		p.sequence++
 		if int(((p.sequence-1)*37)%100) >= rolloverShares[p.step] {
 			return p.old
@@ -179,6 +197,10 @@ func (r *Runtime) rolloverStatusLocked() []map[string]any {
 			share = 100
 		}
 		out = append(out, map[string]any{"source_id": strings.SplitN(p.next.Config.CapacityGroup, "/", 2)[0], "route": id, "egress": p.next.Config.EgressID, "state": p.state, "reason": p.reason, "new_admission_percent": share, "successful_sessions": p.success, "failed_sessions": p.failed, "old_active": p.old.Active.Load(), "udp_ready": udpProven(p.next), "started_at": p.started, "stage_started_at": p.changed, "next_retry_at": p.retryAt})
+		if p.next.Config.CheckServer {
+			v := r.qualityVerdictLocked(p, time.Now())
+			out[len(out)-1]["quality"] = map[string]any{"mode": v.Mode, "reason": v.Reason, "confidence": v.Confidence, "samples": v.Samples, "paired_samples": v.PairedSamples, "bulk_state": v.BulkState, "bulk_ratio": v.BulkRatio}
+		}
 	}
 	return out
 }

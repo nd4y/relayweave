@@ -50,6 +50,7 @@ type Listener struct {
 	AllowCIDRs []string `json:"allow_cidrs,omitempty"`
 }
 type Policy struct {
+	DisableSpeedProbes   bool     `json:"disable_speed_probes,omitempty"`
 	ID                   string   `json:"id"`
 	Mode                 string   `json:"mode"`
 	Routes               []string `json:"routes"`

@@ -27,6 +27,7 @@ import (
 )
 
 type savedState struct {
+	RoutingVersion  int                    `json:"routing_version,omitempty"`
 	Rollovers       []rolloverRecord       `json:"rollovers,omitempty"`
 	ProbeDay        time.Time              `json:"probe_day"`
 	ProbeBudget     map[string]int64       `json:"probe_budget"`
@@ -41,6 +42,7 @@ type savedState struct {
 	Drained         bool                   `json:"drained"`
 }
 type Agent struct {
+	legacyJournal         bool
 	probeMu               sync.Mutex
 	retryAt               atomic.Int64
 	failureAttempts       atomic.Int64
@@ -166,6 +168,7 @@ func AgentRun(ctx context.Context) error {
 	go a.commandLoop()
 	go a.adaptiveProbes()
 	go a.udpProbes()
+	go a.rolloverQualityLoop()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	lastLeaseWrite := time.Time{}
@@ -191,7 +194,7 @@ func AgentRun(ctx context.Context) error {
 		if pendingTopology == nil {
 			pendingTopology = r.TopologyFrame(g)
 		}
-		assignment, err := wire.Sync(call, conn, &wire.Hello{RoutingVersion: 2, Topology: pendingTopology, WorkerID: id, Generation: generation, GuardVersion: guardVersion, Status: b, Results: results, CSR: csr})
+		assignment, err := wire.Sync(call, conn, &wire.Hello{RoutingVersion: wire.RoutingVersion, Topology: pendingTopology, WorkerID: id, Generation: generation, GuardVersion: guardVersion, Status: b, Results: results, CSR: csr})
 		cancel()
 		if err != nil {
 			if online {
@@ -440,13 +443,19 @@ func (a *Agent) load() error {
 		if len(b) <= n {
 			continue
 		}
-		plain, err := a.aead.Open(nil, b[:n], b[n:], []byte("relayweave-worker-v1"))
+		plain, legacy, err := a.openWorkerPayload(b, workerStateDomain, "relayweave-worker-v1")
 		if err != nil {
 			continue
 		}
-		if json.Unmarshal(plain, &a.state) != nil {
+		var candidate savedState
+		if json.Unmarshal(plain, &candidate) != nil {
 			continue
 		}
+		if candidate.RoutingVersion > wire.RoutingVersion {
+			return fmt.Errorf("worker_routing_upgrade_required")
+		}
+		a.state = candidate
+		a.legacyJournal = legacy
 		if a.state.Done == nil {
 			a.state.Done = map[string]wire.Result{}
 		}
@@ -461,26 +470,29 @@ func (a *Agent) load() error {
 	return a.loadJournals()
 }
 func (a *Agent) saveLocked() error {
-	if a.persisted && a.persistedGeneration == a.state.Generation && a.persistedFence == a.state.FenceGeneration {
+	a.state.RoutingVersion = wire.RoutingVersion
+	if a.persisted && !a.legacyJournal && a.persistedGeneration == a.state.Generation && a.persistedFence == a.state.FenceGeneration {
 		return a.saveMeta()
 	}
 	b, e := json.Marshal(a.state)
 	if e != nil {
 		return e
 	}
-	nonce := make([]byte, a.aead.NonceSize())
-	if _, e = rand.Read(nonce); e != nil {
+	sealed, e := a.sealWorkerPayload(b, workerStateDomain)
+	if e != nil {
 		return e
 	}
-	sealed := a.aead.Seal(nonce, nonce, b, []byte("relayweave-worker-v1"))
 	path := filepath.Join(a.dir, "last-good.enc")
 	if old, e := readBounded(path, 64<<20); e == nil {
-		n := a.aead.NonceSize()
-		if len(old) > n {
-			if _, err := a.aead.Open(nil, old[:n], old[n:], []byte("relayweave-worker-v1")); err == nil {
-				if e = store.AtomicFile(filepath.Join(a.dir, "previous-good.enc"), old, 0600); e != nil {
+		if plain, legacy, err := a.openWorkerPayload(old, workerStateDomain, "relayweave-worker-v1"); err == nil {
+			if legacy {
+				old, e = a.sealWorkerPayload(plain, workerStateDomain)
+				if e != nil {
 					return e
 				}
+			}
+			if e = store.AtomicFile(filepath.Join(a.dir, "previous-good.enc"), old, 0600); e != nil {
+				return e
 			}
 		}
 	}
@@ -488,26 +500,28 @@ func (a *Agent) saveLocked() error {
 		return e
 	}
 	a.persisted = true
+	a.legacyJournal = false
 	a.persistedGeneration = a.state.Generation
 	a.persistedFence = a.state.FenceGeneration
 	return a.saveMeta()
 }
 
 type mutableState struct {
-	Rollovers    []rolloverRecord       `json:"rollovers,omitempty"`
-	GuardVersion int64                  `json:"guard_version,omitempty"`
-	ProbeDay     time.Time              `json:"probe_day"`
-	ProbeBudget  map[string]int64       `json:"probe_budget"`
-	Generation   int64                  `json:"generation"`
-	Fence        int64                  `json:"fence"`
-	Lease        time.Time              `json:"lease"`
-	Done         map[string]wire.Result `json:"done"`
-	Results      []wire.Result          `json:"results"`
-	Drained      bool                   `json:"drained"`
+	RoutingVersion int                    `json:"routing_version,omitempty"`
+	Rollovers      []rolloverRecord       `json:"rollovers,omitempty"`
+	GuardVersion   int64                  `json:"guard_version,omitempty"`
+	ProbeDay       time.Time              `json:"probe_day"`
+	ProbeBudget    map[string]int64       `json:"probe_budget"`
+	Generation     int64                  `json:"generation"`
+	Fence          int64                  `json:"fence"`
+	Lease          time.Time              `json:"lease"`
+	Done           map[string]wire.Result `json:"done"`
+	Results        []wire.Result          `json:"results"`
+	Drained        bool                   `json:"drained"`
 }
 
 func (a *Agent) saveMeta() error {
-	m := mutableState{Generation: a.state.Generation, Fence: a.state.FenceGeneration, GuardVersion: a.state.GuardVersion, Done: a.state.Done, Results: a.state.Results, Drained: a.state.Drained}
+	m := mutableState{RoutingVersion: wire.RoutingVersion, Generation: a.state.Generation, Fence: a.state.FenceGeneration, GuardVersion: a.state.GuardVersion, Done: a.state.Done, Results: a.state.Results, Drained: a.state.Drained}
 	m.ProbeDay, m.ProbeBudget = a.state.ProbeDay, a.state.ProbeBudget
 	if a.runtime != nil {
 		a.runtime.mu.RLock()
@@ -526,11 +540,11 @@ func (a *Agent) saveMeta() error {
 	if e != nil {
 		return e
 	}
-	nonce := make([]byte, a.aead.NonceSize())
-	if _, e = rand.Read(nonce); e != nil {
+	sealed, e := a.sealWorkerPayload(plain, workerMetaDomain)
+	if e != nil {
 		return e
 	}
-	if e = store.AtomicFile(filepath.Join(a.dir, "worker-meta.enc"), a.aead.Seal(nonce, nonce, plain, []byte("relayweave-meta-v1")), 0600); e != nil {
+	if e = store.AtomicFile(filepath.Join(a.dir, "worker-meta.enc"), sealed, 0600); e != nil {
 		return e
 	}
 	if a.runtime != nil {
@@ -550,13 +564,16 @@ func (a *Agent) loadMeta() error {
 	if len(b) <= n || len(b) > 2<<20 {
 		return fmt.Errorf("worker_metadata_corrupt")
 	}
-	plain, e := a.aead.Open(nil, b[:n], b[n:], []byte("relayweave-meta-v1"))
+	plain, _, e := a.openWorkerPayload(b, workerMetaDomain, "relayweave-meta-v1")
 	if e != nil {
 		return fmt.Errorf("worker_metadata_corrupt")
 	}
 	var m mutableState
 	if json.Unmarshal(plain, &m) != nil || len(m.Done) > 1000 || len(m.Results) > 200 {
 		return fmt.Errorf("worker_metadata_corrupt")
+	}
+	if m.RoutingVersion > wire.RoutingVersion {
+		return fmt.Errorf("worker_routing_upgrade_required")
 	}
 	a.state.GuardVersion = max(a.state.GuardVersion, m.GuardVersion)
 	if m.Generation < a.state.Generation || m.Fence < a.state.FenceGeneration {

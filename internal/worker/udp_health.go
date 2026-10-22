@@ -70,7 +70,17 @@ func (a *Agent) probeUDPCapability(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	targets := r.Configuration().UDPProbeTargets
+	r.mu.RLock()
+	allowed := ctx.Err() == nil && !r.drained.Load() && time.Now().Unix() <= r.lease.Load() && r.permitted(choice.policy, candidate.Config) && !r.establishedOnlyLocked(candidate.Config)
+	cfg := r.config
+	if r.constraints != nil {
+		cfg = *r.constraints
+	}
+	targets := append([]string(nil), cfg.UDPProbeTargets...)
+	r.mu.RUnlock()
+	if !allowed {
+		return
+	}
 	if len(targets) == 0 {
 		targets = []string{"1.1.1.1:53", "9.9.9.9:53"}
 	}
@@ -83,7 +93,11 @@ func (a *Agent) probeUDPCapability(ctx context.Context) {
 			break
 		}
 	}
-	recordUDPProbe(candidate, ok, time.Now())
+	r.mu.Lock()
+	if !r.drained.Load() && time.Now().Unix() <= r.lease.Load() && r.permitted(choice.policy, candidate.Config) && !r.establishedOnlyLocked(candidate.Config) {
+		recordUDPProbe(candidate, ok, time.Now())
+	}
+	r.mu.Unlock()
 }
 
 // A separate serial loop cannot be delayed behind the ten-second capacity
