@@ -33,6 +33,14 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 	soak := rolloverSoakDuration(t)
 	ctx, cancel := context.WithTimeout(context.Background(), soak+240*time.Second)
 	defer cancel()
+	diagnostic := newRolloverDiagnostics(os.Getenv("ROLLOVER_DIAGNOSTICS_PATH"))
+	var diagnosticPID atomic.Pointer[atomic.Int64]
+	originPID := func() int64 {
+		if pid := diagnosticPID.Load(); pid != nil {
+			return pid.Load()
+		}
+		return 0 // No original engine has been selected yet.
+	}
 	free := func() int {
 		l, e := net.Listen("tcp", "127.0.0.1:0")
 		if e != nil {
@@ -125,19 +133,36 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 		for {
 			n, from, e := udp.ReadFromUDP(buf)
 			if e != nil {
+				if diagnostic != nil {
+					diagnostic.record("origin_recv_error", 0, originPID(), "", false, 0, e)
+				}
 				return
 			}
 			if n == 29 && buf[2] == 1 && buf[5] == 1 {
 				buf[2] |= 0x80
 			}
-			if bytes.HasPrefix(buf[:n], []byte("persistent-udp-sequence-")) {
+			heldPacket := bytes.HasPrefix(buf[:n], []byte("persistent-udp-sequence-"))
+			var sequence uint64
+			if heldPacket {
+				if diagnostic != nil {
+					sequence, _ = strconv.ParseUint(string(buf[len("persistent-udp-sequence-"):n]), 10, 64)
+				}
 				if peer := persistentUDPPeer.Load(); peer == nil {
 					persistentUDPPeer.Store(from.String())
 				} else if peer.(string) != from.String() {
 					changedUDPPeer.Store(true)
 				}
+				if diagnostic != nil {
+					diagnostic.record("origin_recv", sequence, originPID(), from.String(), changedUDPPeer.Load(), n, nil)
+				}
 			}
-			udp.WriteToUDP(buf[:n], from)
+			written, writeErr := udp.WriteToUDP(buf[:n], from)
+			if diagnostic != nil && heldPacket {
+				if writeErr == nil && written != n {
+					writeErr = io.ErrShortWrite
+				}
+				diagnostic.record("origin_send", sequence, originPID(), from.String(), changedUDPPeer.Load(), written, writeErr)
+			}
 		}
 	}()
 	file, err := os.ReadFile(binary)
@@ -204,6 +229,9 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 	if oldPID == 0 {
 		t.Fatal("old engine process missing")
 	}
+	if diagnostic != nil {
+		diagnosticPID.Store(&old.Instance.PID)
+	}
 	heldCtx, stopHeld := context.WithCancel(ctx)
 	held := startRolloverHeldOwner(heldCtx, cancel, oldTCP, packets, "origin.test", udp.LocalAddr().(*net.UDPAddr).Port, oldPID, old.Instance.PID.Load, func() (string, bool) {
 		actual := ""
@@ -211,12 +239,15 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 			actual = p.(string)
 		}
 		return actual, changedUDPPeer.Load()
-	}, time.Second)
+	}, time.Second, diagnostic)
 	defer func() { stopHeld(); oldTCP.Close(); packets.Close(); <-held.Done }()
 	checkHeld := func() {
 		t.Helper()
 		select {
 		case e := <-held.Errors:
+			if held.DiagnosticFailed.Load() {
+				t.Log("held diagnostics unavailable or dump exceeded 200ms; original failure follows")
+			}
 			t.Fatal(e)
 		default:
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"path/filepath"
 	"proxyplatform/internal/core"
 	"strings"
 	"sync"
@@ -89,5 +90,31 @@ func TestRolloverHeldOwnerContinuesWithoutMainLoopAndReportsFailure(t *testing.T
 		}
 	default:
 		t.Fatal("failure not delivered to test goroutine")
+	}
+}
+
+func TestRolloverHeldOwnerDumpFailurePreservesOriginalError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	diagnostic := newRolloverDiagnostics(filepath.Join(t.TempDir(), "missing", "failure.json"))
+	// A PID mismatch occurs before touching either socket. A failed diagnostic
+	// write must still deliver that exact error and cancel the owner context.
+	owner := startRolloverHeldOwner(ctx, cancel, nil, nil, "origin.test", 53, 12,
+		func() int64 { return 13 }, func() (string, bool) { return "127.0.0.1:3000", false }, time.Millisecond, diagnostic)
+	select {
+	case <-owner.Done:
+	case <-time.After(time.Second):
+		t.Fatal("failed dump blocked held owner")
+	}
+	if !owner.DiagnosticFailed.Load() || !diagnostic.failed.Load() || ctx.Err() == nil {
+		t.Fatal("dump failure concealed or prevented cancellation")
+	}
+	select {
+	case err := <-owner.Errors:
+		if err.Error() != "held_engine_process_changed" {
+			t.Fatal("dump masked original held error", err)
+		}
+	default:
+		t.Fatal("original held error lost")
 	}
 }
