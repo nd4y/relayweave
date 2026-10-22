@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -79,8 +80,16 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.CommandContext(ctx, binary, "run", "-config", path)
+	var upstreamPID atomic.Int64
+	if diagnostic != nil {
+		cmd.Stdout = &rolloverUpstreamWriter{diagnostic: diagnostic, stage: "upstream_stdout", pid: &upstreamPID}
+		cmd.Stderr = &rolloverUpstreamWriter{diagnostic: diagnostic, stage: "upstream_stderr", pid: &upstreamPID}
+	}
 	if err = cmd.Start(); err != nil {
 		t.Fatal(err)
+	}
+	if diagnostic != nil {
+		upstreamPID.Store(int64(cmd.Process.Pid))
 	}
 	defer func() { cancel(); cmd.Wait() }()
 	for _, port := range ports {
@@ -92,6 +101,15 @@ func TestRealSubscriptionRolloverPreservesTCPUDP(t *testing.T) {
 				break
 			}
 			if time.Now().After(deadline) {
+				if diagnostic != nil {
+					failure := fmt.Errorf("upstream unavailable: %w", e)
+					peer := net.JoinHostPort(serverHost, strconv.Itoa(port))
+					pid := int64(cmd.Process.Pid) // Start already succeeded.
+					diagnostic.record("upstream_unavailable", 0, pid, peer, false, 0, failure)
+					if dumpErr := diagnostic.capture(failure, rolloverTraceEvent{Stage: "upstream_unavailable", PID: pid, Peer: peer}); dumpErr != nil {
+						t.Log("upstream diagnostics unavailable or dump exceeded 200ms; original setup failure follows")
+					}
+				}
 				t.Fatal("upstream unavailable")
 			}
 			time.Sleep(20 * time.Millisecond)

@@ -25,6 +25,7 @@ type rolloverTraceEvent struct {
 	PeerChanged bool
 	Bytes       int
 	Error       string `json:",omitempty"`
+	Output      string `json:",omitempty"`
 }
 
 // Only synthetic fixture fields enter this trace: no payload/config/headers.
@@ -62,14 +63,37 @@ func (d *rolloverDiagnostics) record(stage string, sequence uint64, pid int64, p
 	if d == nil {
 		return
 	}
+	d.add(rolloverTraceEvent{Stage: stage, Sequence: sequence, PID: pid, Peer: peer, PeerChanged: changed, Bytes: n, Error: rolloverDiagnosticError(err)})
+}
+
+func (d *rolloverDiagnostics) add(event rolloverTraceEvent) {
 	if !d.mu.TryLock() {
 		d.dropped.Add(1)
 		return
 	}
 	defer d.mu.Unlock()
-	d.ring[d.next] = rolloverTraceEvent{time.Since(d.started).Nanoseconds(), stage, sequence, pid, peer, changed, n, rolloverDiagnosticError(err)}
+	event.ElapsedNS = time.Since(d.started).Nanoseconds()
+	d.ring[d.next] = event
 	d.next = (d.next + 1) % len(d.ring)
 	d.count = min(d.count+1, len(d.ring))
+}
+
+// Attach only to the public synthetic freedom upstream, never managed cores.
+// exec may call Write before Start returns: PID is an independent atomic set
+// AFTER successful Start, not a concurrent read of cmd.Process.
+type rolloverUpstreamWriter struct {
+	diagnostic *rolloverDiagnostics
+	stage      string
+	pid        *atomic.Int64
+}
+
+func (w *rolloverUpstreamWriter) Write(p []byte) (int, error) {
+	if w.diagnostic != nil {
+		// Retain the tail: startup errors often follow a banner in one write.
+		w.diagnostic.add(rolloverTraceEvent{Stage: w.stage, PID: w.pid.Load(), Bytes: len(p), Output: string(p[max(0, len(p)-512):])})
+	}
+	// Truncation/contention drops diagnostics, never backpressures the process.
+	return len(p), nil
 }
 
 func (d *rolloverDiagnostics) snapshot() ([]rolloverTraceEvent, bool) {
@@ -224,5 +248,27 @@ func TestRolloverDiagnosticsBoundedRingAndDumpFailure(t *testing.T) {
 	}
 	if err := d.capture(fmt.Errorf("original held failure"), rolloverTraceEvent{}); err == nil {
 		t.Fatal("missing-parent dump unexpectedly succeeded")
+	}
+}
+
+func TestRolloverUpstreamWriterBoundedAndNonblocking(t *testing.T) {
+	d := newRolloverDiagnostics(filepath.Join(t.TempDir(), "unused.json"))
+	var pid atomic.Int64
+	w := &rolloverUpstreamWriter{diagnostic: d, stage: "upstream_stderr", pid: &pid}
+	payload := []byte(strings.Repeat("public upstream output ", 200))
+	d.mu.Lock()
+	n, err := w.Write(payload) // No Process access before Start/PID publication.
+	d.mu.Unlock()
+	if n != len(payload) || err != nil || d.dropped.Load() != 1 {
+		t.Fatal("contended writer backpressured synthetic upstream", n, err)
+	}
+	pid.Store(123)
+	n, err = w.Write(payload)
+	events, ok := d.snapshot()
+	if n != len(payload) || err != nil || !ok || len(events) != 1 {
+		t.Fatal("missing synthetic output", n, err, len(events))
+	}
+	if events[0].PID != 123 || events[0].Stage != "upstream_stderr" || events[0].Output != string(payload[len(payload)-512:]) || events[0].Bytes != len(payload) {
+		t.Fatal("unbounded or incorrectly attributed output", events[0])
 	}
 }
