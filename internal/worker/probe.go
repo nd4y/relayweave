@@ -25,6 +25,8 @@ type profileProbe struct {
 }
 
 func (a *Agent) test(ctx context.Context, command wire.Command) (any, error) {
+	a.probeMu.Lock()
+	defer a.probeMu.Unlock()
 	var body profileProbe
 	if len(command.Payload) > 0 && json.Unmarshal(command.Payload, &body) != nil {
 		return nil, fmt.Errorf("probe_payload_invalid")
@@ -194,7 +196,6 @@ func (a *Agent) adaptiveProbes() {
 		case <-a.ctx.Done():
 			return
 		case <-ticker.C:
-			a.probeUDPCapability(a.ctx)
 			cfg := a.runtime.Configuration()
 			now := time.Now()
 			a.runtime.mu.RLock()

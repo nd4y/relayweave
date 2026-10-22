@@ -88,7 +88,12 @@ func (r *Runtime) reserveRoute(key string, v *Route) (*routeTicket, error) {
 }
 
 func udpProven(v *Route) bool {
-	return !v.Config.CheckServer || (v.UDPHealthy.Load() && v.UDPChecks.Load() >= 3 && time.Now().Unix()-v.UDPChecked.Load() <= 90)
+	return udpProvenAt(v, time.Now())
+}
+
+func udpProvenAt(v *Route, now time.Time) bool {
+	age := now.Unix() - v.UDPChecked.Load()
+	return !v.Config.CheckServer || (v.UDPHealthy.Load() && v.UDPChecks.Load() >= 3 && age >= 0 && age <= 90)
 }
 
 func (r *Runtime) reserveRouteCapability(key string, v *Route, udp bool) (*routeTicket, error) {
