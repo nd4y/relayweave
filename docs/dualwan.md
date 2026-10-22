@@ -90,8 +90,13 @@ balancer identity, rather than claiming extra server capacity. Probes, circuit
 breakers and delivery observations stay per path. Disabled paths are not compiled
 or probed; retiring existing sessions may drain. Retry order includes other ISPs.
 
-Manual/fallback/timed/sticky/latency modes retain their existing ordering semantics;
-weighted ISP selection applies only to the three balanced modes above. Manual
+Fallback preserves the first healthy logical profile and its profile retry order,
+but allocates new connections between that profile's healthy ISP variants using
+automatic lane weights. Pinning a profile therefore does not pin an ISP, even
+when the profile window is one. Disabled or freshly reported down lanes are
+excluded; existing connections keep their path.
+
+Manual/timed/sticky/latency modes retain their existing ordering semantics. Manual
 means the first compiled path. A TCP connection or UDP association stays on one
 path; existing TCP sessions cannot migrate to another public source IP. This is
 parallel-flow balancing, not single-stream bonding.

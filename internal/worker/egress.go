@@ -9,12 +9,16 @@ import (
 // Smooth weighted scheduling operates on ISP lanes, never profile counts.
 // Aggregate live sessions reduce a lane's share while it carries long flows.
 func (r *Runtime) selectEgressLocked(p *policyState, routes []*Route, d *topology.Decision) []*Route {
+	return r.selectEgressLimitLocked(p, routes, p.config.ActivePaths, d)
+}
+
+func (r *Runtime) selectEgressLimitLocked(p *policyState, routes []*Route, limit int, d *topology.Decision) []*Route {
 	if p.egressCredit == nil {
 		p.egressCredit = map[string]float64{}
 	}
 	lanes := map[string][]*Route{}
 	active := map[string]int64{}
-	for _, v := range routes[:min(len(routes), p.config.ActivePaths)] {
+	for _, v := range routes[:min(len(routes), max(1, limit))] {
 		if r.telemetryDownLocked(v.Config.EgressID, time.Now()) {
 			continue
 		}
@@ -118,6 +122,23 @@ func (r *Runtime) selectEgressLocked(p *policyState, routes []*Route, d *topolog
 		evidence.WANUtilization = a.Utilization
 		evidence.WANFactor = a.Factor
 		d.Candidates = append(d.Candidates, evidence)
+	}
+	return result
+}
+
+// Keep fallback's first healthy logical profile, while balancing its independent
+// ISP variants. A pinned profile must not silently pin every session to ISP1.
+func (r *Runtime) selectFallbackEgressLocked(p *policyState, routes []*Route, d *topology.Decision) []*Route {
+	profile := routes[0].Config.Profile()
+	variants := []*Route{}
+	for _, v := range routes {
+		if v.Config.Profile() == profile { variants = append(variants, v) }
+	}
+	result := r.selectEgressLimitLocked(p, variants, len(variants), d)
+	seen := map[*Route]bool{}
+	for _, v := range result { seen[v] = true }
+	for _, v := range routes {
+		if !seen[v] && r.egressEnabledLocked(v.Config.EgressID) && !r.telemetryDownLocked(v.Config.EgressID, time.Now()) { result = append(result, v) }
 	}
 	return result
 }

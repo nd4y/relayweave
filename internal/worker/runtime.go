@@ -748,6 +748,9 @@ func (r *Runtime) candidatesObserved(key string, decision *topology.Decision) (r
 	if decision != nil {
 		decision.Mode = mode
 	}
+	if p != nil && len(r.config.EgressPaths) > 0 && mode == "fallback" {
+		return r.selectFallbackEgressLocked(p, out, decision)
+	}
 	if p != nil && len(r.config.EgressPaths) > 0 && (mode == "auto" || mode == "throughput" || mode == "round-robin") {
 		return r.selectEgressLocked(p, out, decision)
 	}
