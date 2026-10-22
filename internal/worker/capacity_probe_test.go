@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,8 +23,9 @@ func TestAutomaticProbeReservesAndReadsOnlyItsBoundBeforePersistingEstimate(t *t
 			t.Fatal(err)
 		}
 	}
-	for _, automatic := range []bool{true, false} {
-		t.Run(strconv.FormatBool(automatic), func(t *testing.T) {
+	for _, tc := range []struct{ automatic, traffic bool }{{true, false}, {false, false}, {true, true}} {
+		automatic := tc.automatic
+		t.Run(strconv.FormatBool(automatic)+"_traffic_"+strconv.FormatBool(tc.traffic), func(t *testing.T) {
 			a := &Agent{dir: t.TempDir(), ctx: context.Background()}
 			if err := a.load(); err != nil {
 				t.Fatal(err)
@@ -36,12 +38,23 @@ func TestAutomaticProbeReservesAndReadsOnlyItsBoundBeforePersistingEstimate(t *t
 				limit = automaticCapacityProbeBytes
 			}
 			requests := make(chan string, 1)
+			startTraffic := make(chan struct{})
 			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 				requests <- req.Header.Get("Range")
 				// A distant origin must affect RTT, not the payload capacity.
 				time.Sleep(150 * time.Millisecond)
 				// Deliberately ignore Range. The client must bound actual reads.
 				w.Header().Set("Content-Length", strconv.Itoa(8<<20))
+				if tc.traffic {
+					w.(http.Flusher).Flush()
+					close(startTraffic)
+					for range 16 {
+						_, _ = w.Write([]byte(strings.Repeat("x", 64<<10)))
+						w.(http.Flusher).Flush()
+						time.Sleep(10 * time.Millisecond)
+					}
+					return
+				}
 				_, _ = w.Write([]byte(strings.Repeat("x", 8<<20)))
 			}))
 			defer origin.Close()
@@ -57,6 +70,43 @@ func TestAutomaticProbeReservesAndReadsOnlyItsBoundBeforePersistingEstimate(t *t
 			key := routeIdentity(c.Routes[0], "test/")
 			e := &engineEntry{key: key, route: &Route{Config: c.Routes[0], Instance: &core.Instance{Config: config.Core{Family: "worker-probe-budget-test"}}}}
 			r.entries = map[string]*engineEntry{key: e}
+			if tc.traffic {
+				stopTraffic := make(chan struct{})
+				defer close(stopTraffic)
+				// A real competing user socket shares this route. Its kernel
+				// counters must be sampled within the short probe window, not
+				// deferred to the regular one-second telemetry tick.
+				userOrigin, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer userOrigin.Close()
+				go func() {
+					c, err := userOrigin.Accept()
+					if err != nil {
+						return
+					}
+					defer c.Close()
+					select {
+					case <-startTraffic:
+					case <-stopTraffic:
+						return
+					}
+					for range 16 {
+						_, _ = c.Write([]byte(strings.Repeat("u", 256<<10)))
+						time.Sleep(10 * time.Millisecond)
+					}
+				}()
+				conn, err := net.Dial("tcp", userOrigin.Addr().String())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer conn.Close()
+				tracked := &routeConn{TCPConn: conn.(*net.TCPConn), route: e.route}
+				tracked.baseline()
+				a.gateway = &Gateway{sockets: map[*routeConn]struct{}{tracked: {}}}
+				go func() { _, _ = io.Copy(io.Discard, conn) }()
+			}
 			payload, _ := json.Marshal(profileProbe{ProbeURL: origin.URL, SpeedURL: origin.URL, PolicyID: "p", Budget: 128 << 20, Automatic: automatic})
 			result, err := a.test(context.Background(), wire.Command{Action: "speed-test", Target: "route", Payload: payload})
 			if err != nil {
@@ -72,6 +122,9 @@ func TestAutomaticProbeReservesAndReadsOnlyItsBoundBeforePersistingEstimate(t *t
 			wholeRequestBPS := float64(limit) / (measurement["elapsed_ms"].(float64) / 1000)
 			if float64(e.route.SpeedBPS.Load()) <= wholeRequestBPS*2 || measurement["ttfb_ms"].(float64) < 140 {
 				t.Fatal("payload capacity still includes setup latency")
+			}
+			if tc.traffic && (measurement["concurrent_bytes"].(int64) < 2<<20 || measurement["mbps"].(float64) < measurement["probe_mbps"].(float64)*3) {
+				t.Fatal("busy route capacity lost concurrent user delivery")
 			}
 			b := &Agent{dir: a.dir}
 			if err := b.load(); err != nil {

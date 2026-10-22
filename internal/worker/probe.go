@@ -143,7 +143,17 @@ func (a *Agent) test(ctx context.Context, command wire.Command) (any, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("probe_http_status")
 	}
+	var trafficBefore int64
+	if command.Action == "speed-test" {
+		trafficBefore = a.gateway.routeDownSnapshot(e.route)
+	}
+	bodyStarted := time.Now()
 	n, err := io.Copy(io.Discard, io.LimitReader(resp.Body, limit))
+	var trafficAfter int64
+	if command.Action == "speed-test" {
+		trafficAfter = a.gateway.routeDownSnapshot(e.route)
+	}
+	bodyTime := time.Since(bodyStarted)
 	elapsed := time.Since(started)
 	r.probeBytes.Add(n)
 	if err != nil && (command.Action != "speed-test" || n < 1<<20) {
@@ -157,11 +167,14 @@ func (a *Agent) test(ctx context.Context, command wire.Command) (any, error) {
 		}
 		// Setup/TTFB is scored separately as latency. Including it in a short
 		// transfer sample systematically understates fast, distant paths.
-		bodyTime := elapsed - first
 		if bodyTime <= 0 {
 			return nil, fmt.Errorf("speed_sample_duration_invalid")
 		}
-		bps := int64(float64(n) / bodyTime.Seconds())
+		// A probe competes with existing transfers. Measure their delivered
+		// bytes on this exact engine in the SAME window, otherwise a busy fast
+		// path is mistaken for a slow one. This adds no measurement traffic.
+		concurrentBytes := max(int64(0), trafficAfter-trafficBefore)
+		bps := int64(float64(n+concurrentBytes) / bodyTime.Seconds())
 		e.route.SpeedBPS.Store(bps)
 		e.route.LastSpeed.Store(time.Now().Unix())
 		e.route.CapacityConnections.Store(e.route.Connections.Load())
@@ -178,7 +191,9 @@ func (a *Agent) test(ctx context.Context, command wire.Command) (any, error) {
 		}
 		result["mbps"] = float64(bps) * 8 / 1e6
 		result["body_ms"] = float64(bodyTime.Microseconds()) / 1000
-		result["confidence"] = "single_bounded_sample"
+		result["probe_mbps"] = float64(n) * 8 / bodyTime.Seconds() / 1e6
+		result["concurrent_bytes"] = concurrentBytes
+		result["confidence"] = "single_bounded_aggregate_sample"
 	}
 	return result, nil
 }

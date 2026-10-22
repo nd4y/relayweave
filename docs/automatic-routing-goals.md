@@ -82,7 +82,12 @@ their previous8MiB bound and shared daily limit.
 
 Automatic speed probes reserve and read at most1MiB per sample, before I/O,
 with the existing3second bound. Payload rate excludes connection setup/TTFB,
-which remains a separate latency signal. Background sampling is limited to
+which remains a separate latency signal.
+The rate includes delivered user bytes from the same engine during the probe
+window, using synchronized kernel-counter snapshots. A busy path is therefore
+not judged solely by the probe's remaining share. Only probe bytes consume the
+probe allowance; existing user bytes are not extra measurement traffic.
+Background sampling is limited to
 automatic policies with a real choice of paths. After initial measurement,
 idle paths retain their allowance; activity or a detected change can request
 refresh. A fresh active sample remains the baseline when delivered traffic

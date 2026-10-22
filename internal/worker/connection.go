@@ -139,6 +139,27 @@ func (c *routeConn) sample() {
 		c.windowDown = down
 	}
 }
+
+// Flush kernel counters at both boundaries of an active capacity sample.
+// The regular one-second sampler is too coarse for a short bounded transfer.
+// Payload forwarding retains its splice path; this runs only in the prober.
+func (g *Gateway) routeDownSnapshot(route *Route) int64 {
+	if g != nil {
+		g.socketMu.Lock()
+		list := make([]*routeConn, 0)
+		for c := range g.sockets {
+			if c.route == route {
+				list = append(list, c)
+			}
+		}
+		g.socketMu.Unlock()
+		for _, c := range list {
+			c.sample()
+		}
+	}
+	return route.BytesDown.Load()
+}
+
 func (g *Gateway) sampleSockets() {
 	type observation struct {
 		up, down int64
