@@ -27,6 +27,7 @@ import (
 )
 
 type Route struct {
+	FailureProbeSamples atomic.Int64
 	TrafficDownBPS      atomic.Int64
 	TrafficUpBPS        atomic.Int64
 	TrafficAt           atomic.Int64

@@ -103,12 +103,13 @@ func (r *Runtime) reserveRouteCapability(key string, v *Route, udp bool) (*route
 	if strings.HasPrefix(key, "policy:") {
 		policy = strings.TrimPrefix(key, "policy:")
 	}
-	v = r.chooseRevisionLocked(v, time.Now())
+	now := time.Now()
+	v = r.safeRevisionAdmissionLocked(r.chooseRevisionLocked(v, now), now)
+	if v == nil {
+		return nil, fmt.Errorf("route_not_ready")
+	}
 	if r.establishedOnlyLocked(v.Config) {
 		return nil, fmt.Errorf("revision_draining")
-	}
-	if v.Config.CheckServer && len(v.Config.Previous) > 0 && r.rollovers[v.Config.ID] == nil && v.Instance.ProbeSamples.Load() < 3 {
-		return nil, fmt.Errorf("revision_protocol_evidence_pending")
 	}
 	if udp && (!v.Config.UDP || !udpProven(v)) {
 		if p := r.rollovers[v.Config.ID]; p != nil && p.old.Config.UDP && udpProven(p.old) {
@@ -116,6 +117,11 @@ func (r *Runtime) reserveRouteCapability(key string, v *Route, udp bool) (*route
 		} else {
 			return nil, fmt.Errorf("udp_not_validated")
 		}
+	}
+	// UDP capability fallback can choose a different old engine. It must obey
+	// the same current health/circuit gate as the initial revision selection.
+	if !r.revisionReadyForAdmissionLocked(v, now) {
+		return nil, fmt.Errorf("route_not_ready")
 	}
 	if r.drained.Load() || time.Now().Unix() > r.lease.Load() || !r.permitted(policy, v.Config) {
 		return nil, fmt.Errorf("route_not_admitted")
