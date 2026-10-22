@@ -28,6 +28,7 @@ import "./topology.css";
 import { TopologyCanvas } from "./topology-canvas";
 import { routeHistories, type TrafficPoint } from "./topology-series";
 import { ipGroups } from "./topology-groups";
+import { TopologyFreshness } from "./topology-freshness";
 
 type Candidate = {
   egress?: string;
@@ -240,7 +241,7 @@ export function TrafficTopology({
     [windowSec, setWindowSec] = useState(10);
   const [selection, setSelected] = useState<Node | null>(null),
     [decision, setDecision] = useState<Decision | null>(null),
-    [tick, setTick] = useState(Date.now()),
+    [tick, setTick] = useState(performance.now()),
     [history, setHistory] = useState<any[] | null>(null);
   const [pinned, setPinned] = useState<Set<string>>(new Set()),
     [expanded, setExpanded] = useState(false),
@@ -322,6 +323,7 @@ export function TrafficTopology({
     [],
   );
   const samples = useRef<Map<string, Frame[]>>(new Map()),
+    freshness = useRef(new TopologyFreshness()),
     cursor = useRef(""),
     visible = useRef(!document.hidden);
   const mobile = useMediaQuery("(max-width: 800px)");
@@ -343,13 +345,15 @@ export function TrafficTopology({
       }
     }
     setData(s);
+    setTick(performance.now());
   }, []);
   useEffect(() => {
     const timer = setInterval(() => {
-      if (!document.hidden) setTick(Date.now());
+      if (!document.hidden) setTick(performance.now());
     }, 1000);
     const change = () => {
       visible.current = !document.hidden;
+      if (visible.current) setTick(performance.now());
     };
     document.addEventListener("visibilitychange", change);
     return () => {
@@ -377,8 +381,11 @@ export function TrafficTopology({
     async function start() {
       const own = ++attempt;
       try {
+        const requestedAt = performance.now();
         const s = await api<Snapshot>("topology/snapshot");
         if (closed || own !== attempt) return;
+        const receivedAt = performance.now();
+        freshness.current.snapshot(s, receivedAt, receivedAt - requestedAt);
         current = s;
         receive(s);
         setStatus("live");
@@ -387,12 +394,23 @@ export function TrafficTopology({
           "/api/v1/topology/events?cursor=" + encodeURIComponent(s.cursor),
         );
         stream.addEventListener("frame", (e) => {
+          if (closed || own !== attempt) return;
           const m = e as MessageEvent;
-          const event = JSON.parse(m.data) as {
+          let event: {
             cursor: string;
             worker: string;
             frame: Frame;
           };
+          try {
+            event = JSON.parse(m.data);
+            if (!event.frame || typeof event.cursor !== "string" ||
+                typeof event.worker !== "string" || event.frame.worker !== event.worker ||
+                !Array.isArray(event.frame.routes) || !Array.isArray(event.frame.listeners) ||
+                !Array.isArray(event.frame.decisions)) throw new Error("invalid frame");
+          } catch {
+            reconnect();
+            return;
+          }
           if (!current) return;
           if (event.cursor === cursor.current) return;
           if (
@@ -410,6 +428,7 @@ export function TrafficTopology({
               event.frame,
             ],
           };
+          freshness.current.frame(event.frame, performance.now());
           cursor.current = event.cursor;
           if (visible.current) {
             receive(current);
@@ -417,11 +436,21 @@ export function TrafficTopology({
           delay = 1000;
           setStatus("live");
         });
-        stream.addEventListener("heartbeat", () => {
+        stream.addEventListener("heartbeat", (e) => {
+          if (closed || own !== attempt) return;
+          let heartbeat: { server_time: string };
+          try {
+            heartbeat = JSON.parse((e as MessageEvent).data);
+          } catch {
+            return; // A malformed heartbeat cannot refresh worker telemetry.
+          }
+          if (!heartbeat || typeof heartbeat.server_time !== "string") return;
+          freshness.current.heartbeat(heartbeat.server_time, performance.now());
+          if (current) current = { ...current, server_time: heartbeat.server_time };
           if (current && visible.current) receive(current);
         });
-        stream.addEventListener("resync", reconnect);
-        stream.onerror = reconnect;
+        stream.addEventListener("resync", () => { if (!closed && own === attempt) reconnect(); });
+        stream.onerror = () => { if (!closed && own === attempt) reconnect(); };
       } catch (e) {
         if (closed || own !== attempt) return;
         setError(message(e));
@@ -829,7 +858,8 @@ export function TrafficTopology({
       }
     }
   }
-  const stale = data?.workers.some((f) => tick - Date.parse(f.at) > 5000),
+  const freshnessState = freshness.current.state(data?.workers || [], tick),
+    stale = freshnessState === "stale",
     decisions =
       data?.workers
         .flatMap((f) => f.decisions.map((d) => ({ ...d, worker: f.worker })))
@@ -944,10 +974,11 @@ export function TrafficTopology({
             alignItems="center"
           >
             <Chip
+              data-testid="topology-freshness"
               color={
                 paused
                   ? "default"
-                  : stale || status !== "live"
+                  : freshnessState !== "fresh" || status !== "live"
                     ? "warning"
                     : "success"
               }
@@ -956,11 +987,13 @@ export function TrafficTopology({
                   ? "Пауза"
                   : stale
                     ? "Устаревшие данные"
-                    : status === "live"
-                      ? "Live"
-                      : status === "loading"
-                        ? "Загрузка"
-                        : "Переподключение"
+                    : status === "live" && freshnessState === "unknown"
+                      ? "Свежесть неизвестна"
+                      : status === "live"
+                        ? "Live"
+                        : status === "loading"
+                          ? "Загрузка"
+                          : "Переподключение"
               }
               aria-live="polite"
             />
@@ -1210,7 +1243,7 @@ export function TrafficTopology({
             />
           ))}
         </Stack>
-        {(stale || status === "reconnecting") && (
+        {!paused && (stale || status === "reconnecting") && (
           <Alert severity="warning">
             Последняя схема сохранена. Потеря control plane не означает
             остановку уже установленных туннелей.
