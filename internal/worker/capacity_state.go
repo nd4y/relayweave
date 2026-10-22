@@ -159,6 +159,7 @@ func (r *Runtime) restoreEntryCapacityLocked(e *engineEntry, c config.Config, no
 		if ok && validCapacityHint(key, hint, now) && hint.At > e.route.LastSpeed.Load() {
 			e.route.SpeedBPS.Store(hint.BPS)
 			e.route.LastSpeed.Store(hint.At)
+			e.route.CapacityConnections.Store(e.route.Connections.Load())
 		}
 	}
 }

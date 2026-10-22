@@ -38,6 +38,8 @@ func TestAutomaticProbeReservesAndReadsOnlyItsBoundBeforePersistingEstimate(t *t
 			requests := make(chan string, 1)
 			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 				requests <- req.Header.Get("Range")
+				// A distant origin must affect RTT, not the payload capacity.
+				time.Sleep(150 * time.Millisecond)
 				// Deliberately ignore Range. The client must bound actual reads.
 				w.Header().Set("Content-Length", strconv.Itoa(8<<20))
 				_, _ = w.Write([]byte(strings.Repeat("x", 8<<20)))
@@ -65,6 +67,11 @@ func TestAutomaticProbeReservesAndReadsOnlyItsBoundBeforePersistingEstimate(t *t
 			}
 			if result.(map[string]any)["bytes"] != limit || r.budget["p"] != limit || r.capacityBudget["p"] != limit || r.probeBytes.Load() != limit {
 				t.Fatal("I/O exceeded its durable reservation or manual bound changed")
+			}
+			measurement := result.(map[string]any)
+			wholeRequestBPS := float64(limit) / (measurement["elapsed_ms"].(float64) / 1000)
+			if float64(e.route.SpeedBPS.Load()) <= wholeRequestBPS*2 || measurement["ttfb_ms"].(float64) < 140 {
+				t.Fatal("payload capacity still includes setup latency")
 			}
 			b := &Agent{dir: a.dir}
 			if err := b.load(); err != nil {

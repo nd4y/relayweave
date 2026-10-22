@@ -187,6 +187,42 @@ func TestAutomaticProfileWeightsShareIPCapacity(t *testing.T) {
 	}
 }
 
+func TestPassiveImprovementKeepsFreshMeasuredCapacityBaseline(t *testing.T) {
+	r, p, _ := automaticFixture()
+	fast := &Route{Config: config.Route{ID: "fast", ServerHost: "192.0.2.1"}}
+	slow := &Route{Config: config.Route{ID: "slow", ServerHost: "192.0.2.2"}}
+	for _, v := range []*Route{fast, slow} {
+		v.RTTUS.Store(10000)
+		v.LastSpeed.Store(time.Now().Unix())
+	}
+	fast.SpeedBPS.Store(25_000_000)
+	slow.SpeedBPS.Store(2_500_000)
+	slow.PassiveBPS.Store(2_750_000)
+	slow.LastPassive.Store(time.Now().Unix())
+	fastCount := 0
+	for i := 0; i < 1000; i++ {
+		if r.selectAutomaticProfileLocked(p, []*Route{fast, slow}, nil) == fast {
+			fastCount++
+		}
+	}
+	if fastCount < 880 || fastCount > 930 {
+		t.Fatal("slight passive improvement replaced measured slow capacity with unknown-path prior", fastCount)
+	}
+	// Without an active upper-capacity observation, low delivered goodput
+	// must still not downgrade an unknown/idle path.
+	slow.LastSpeed.Store(time.Now().Add(-time.Hour).Unix())
+	p.profileCredit = nil
+	fastCount = 0
+	for i := 0; i < 1000; i++ {
+		if r.selectAutomaticProfileLocked(p, []*Route{fast, slow}, nil) == fast {
+			fastCount++
+		}
+	}
+	if fastCount < 650 || fastCount > 690 {
+		t.Fatal("passive lower bound was treated as an upper capacity", fastCount)
+	}
+}
+
 func TestTelemetryFactorSlewLimit(t *testing.T) {
 	r, p, routes := automaticFixture()
 	set, refresh := attachTelemetry(t, r)

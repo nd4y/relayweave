@@ -8,6 +8,16 @@ const capacityRefreshSeconds = 300
 // Manual tests retain their existing8MiB bound; both paths reserve before I/O.
 const automaticCapacityProbeBytes int64 = 1 << 20
 
+// Probe unknown paths once, then spend only for traffic or a detected change.
+// Fixed/manual policies are excluded by the scheduler, not by this route gate.
+func (r *Route) capacityRefreshUseful(now time.Time) bool {
+	if r.ProbeRequestedAt.Load() != 0 || r.LastSpeed.Load() == 0 {
+		return true
+	}
+	return now.Unix()-r.LastSpeed.Load() >= capacityRefreshSeconds &&
+		(r.Active.Load() > 0 || r.Connections.Load() > r.CapacityConnections.Load())
+}
+
 // Preserve the first observation of a possible change across a probe round.
 // Alternatives already measured after that observation need no repeat probe.
 func (r *Route) requestCapacityProbe(since int64) {

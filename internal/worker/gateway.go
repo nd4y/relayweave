@@ -53,6 +53,7 @@ type Route struct {
 	BlockedUntil        atomic.Int64
 	SpeedBPS            atomic.Int64
 	LastSpeed           atomic.Int64
+	CapacityConnections atomic.Int64
 	ErrorEWMA           atomic.Int64
 	ProbeRequestedAt    atomic.Int64
 	ProbeNotBefore      atomic.Int64

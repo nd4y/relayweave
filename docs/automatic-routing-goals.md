@@ -81,7 +81,13 @@ capacity allowance until the next UTC day. Explicit manual speed tests retain
 their previous8MiB bound and shared daily limit.
 
 Automatic speed probes reserve and read at most1MiB per sample, before I/O,
-with the existing3second bound. The result is a bounded single observation,
+with the existing3second bound. Payload rate excludes connection setup/TTFB,
+which remains a separate latency signal. Background sampling is limited to
+automatic policies with a real choice of paths. After initial measurement,
+idle paths retain their allowance; activity or a detected change can request
+refresh. A fresh active sample remains the baseline when delivered traffic
+slightly exceeds it, rather than being replaced by the unknown-path prior.
+The result is a bounded single observation,
 not a guarantee of WAN capacity. Global and capacity-share remaining bytes and
 the reason a background probe is blocked are available in worker status;
 Prometheus exports the corresponding reservation/remaining-byte counters.

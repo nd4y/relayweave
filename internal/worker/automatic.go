@@ -162,7 +162,7 @@ func (r *Runtime) selectAutomaticProfileLocked(p *policyState, lane []*Route, d 
 			prior = math.Min(prior, float64(v.CeilingBPS))
 		}
 		estimate := float64(e.SpeedUsedBPS)
-		if estimate <= 0 || e.SpeedSource == "delivered_lower_bound" || e.SpeedSource == "active_or_passive_equal" {
+		if estimate <= 0 || (e.SpeedBPS <= 0 && (e.SpeedSource == "delivered_lower_bound" || e.SpeedSource == "active_or_passive_equal")) {
 			estimate = math.Max(prior, estimate)
 			if estimate == prior {
 				e.SpeedSource = "capacity_prior"

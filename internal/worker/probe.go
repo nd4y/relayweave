@@ -155,9 +155,16 @@ func (a *Agent) test(ctx context.Context, command wire.Command) (any, error) {
 		if n < 1<<20 {
 			return nil, fmt.Errorf("speed_sample_too_small")
 		}
-		bps := int64(float64(n) / elapsed.Seconds())
+		// Setup/TTFB is scored separately as latency. Including it in a short
+		// transfer sample systematically understates fast, distant paths.
+		bodyTime := elapsed - first
+		if bodyTime <= 0 {
+			return nil, fmt.Errorf("speed_sample_duration_invalid")
+		}
+		bps := int64(float64(n) / bodyTime.Seconds())
 		e.route.SpeedBPS.Store(bps)
 		e.route.LastSpeed.Store(time.Now().Unix())
+		e.route.CapacityConnections.Store(e.route.Connections.Load())
 		e.route.ProbeNotBefore.Store(0)
 		e.route.ProbeRequestedAt.Store(0)
 		r.mu.Lock()
@@ -170,6 +177,7 @@ func (a *Agent) test(ctx context.Context, command wire.Command) (any, error) {
 			return nil, fmt.Errorf("capacity_sample_persistence_failed")
 		}
 		result["mbps"] = float64(bps) * 8 / 1e6
+		result["body_ms"] = float64(bodyTime.Microseconds()) / 1000
 		result["confidence"] = "single_bounded_sample"
 	}
 	return result, nil
@@ -274,6 +282,13 @@ func (a *Agent) adaptiveProbes() {
 			choices := []candidate{}
 			seen := map[string]bool{}
 			for _, p := range cfg.Policies {
+				if p.DisableSpeedProbes || (p.Mode != "auto" && p.Mode != "throughput") {
+					continue
+				}
+				routes := a.runtime.Candidates("policy:" + p.ID)
+				if len(routes) < 2 {
+					continue // No capacity choice to improve.
+				}
 				// Capacity reservations have their own half-share inside the
 				// unchanged global cap, independently of quality/UDP spending.
 				a.runtime.mu.RLock()
@@ -284,12 +299,12 @@ func (a *Agent) adaptiveProbes() {
 					continue
 				}
 				if p.SpeedURL != "" && p.ProbeBudgetBytes >= automaticCapacityProbeBytes {
-					for _, route := range a.runtime.Candidates("policy:" + p.ID) {
+					for _, route := range routes {
 						attempt, requested := route.LastProbeAttempt.Load(), route.ProbeRequestedAt.Load()
 						if seen[route.Config.ID] || now.Unix()-attempt < 30 || now.Unix() < route.ProbeNotBefore.Load() {
 							continue
 						}
-						if requested == 0 && now.Unix()-route.LastSpeed.Load() < capacityRefreshSeconds {
+						if !route.capacityRefreshUseful(now) {
 							continue
 						}
 						seen[route.Config.ID] = true
