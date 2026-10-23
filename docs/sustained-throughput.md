@@ -57,6 +57,43 @@ incomplete/invalid transfers. Transport overhead is outside the application-byte
 cap. Requests cut by the workload deadline can leave partial payload in the
 attempted count. A byte-cap stop is distinguished from a full-duration result.
 
+## First sustained WAN result
+
+The first isolated dual-ISP run on 2026-10-23 (Europe/Moscow), using runtime
+source `12215bc01224b5ed9a1c27fcf7e7a169b59c49cd`, **failed acceptance**.
+The workload ran for the full 1800 seconds. This is an experimental result,
+not a stable-throughput claim or an accepted production rollout.
+
+| Measurement | Result |
+| --- | --- |
+| Valid completed download average | 183.13 Mbps |
+| Valid completed bytes | 41,204,842,496 |
+| Completed bulk transfers | 614 |
+| Attempted payload average | 195.12 Mbps |
+| 10-second attempted-payload median / p05 | 184.22 / 12.63 Mbps |
+| Request failures, bulk and latency probes combined | 2694 |
+| Successful end-to-end latency p95 | 497 ms |
+
+Both ISP paths carried observed traffic, but before/after counters from only
+currently live cores lose retired-core traffic and cannot establish precise ISP
+shares. Short 20-second per-ISP checks had zero request failures: download/upload
+228.16/19.29 Mbps on one path and 307.02/23.91 Mbps on the other. These short
+checks do not establish sustained upload performance. The planned three-minute
+upload was skipped when the supervisor rejected the download result.
+
+The generator does not yet classify failure causes; the aggregate count must not
+be described as failed files or attributed to a specific network component.
+The origin, workload and route selection differ from a browser speed test, so
+the results are not a controlled comparison with that test. Active capacity
+probes were disabled in the isolated run. Production service was preserved and
+the experimental container was removed without OOM or restarts.
+
+Go race tests and vet passed on the build host. Real-core checks covered both
+bundled versions; an initial native timeout remains recorded alongside the
+controlled passing follow-up. These checks do not override the failed WAN run.
+Error classification, bottleneck diagnosis, controlled fixed-path comparisons
+and sustained upload validation remain required before performance acceptance.
+
 ## Objective
 
 Maximize delivered application bytes over time while respecting a latency SLO,
