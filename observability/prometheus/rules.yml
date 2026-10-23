@@ -1,0 +1,68 @@
+groups:
+  - name: relayweave
+    rules:
+      - alert: ProxyWorkerUnavailable
+        expr: up{job="workers"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: 'Proxy worker metrics unavailable'}
+      - alert: ProxyControlUnavailable
+        expr: up{job="control"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: 'Control API metrics unavailable; worker operates from its local lease'}
+      - alert: ProxyAllRoutesUnhealthy
+        expr: proxy_paths_ready == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: 'No healthy proxy routes'}
+      - alert: ProxyCoreCrashLoop
+        expr: increase(proxy_core_restarts_total[10m]) >= 5
+        for: 30s
+        labels: {severity: warning}
+        annotations: {summary: 'Core is repeatedly restarting'}
+      - alert: ProxyUDPDropBurst
+        expr: rate(proxy_udp_drops_total[5m]) > 1
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: 'Elevated UDP drops'}
+      - alert: ProxyLeaseExpiring
+        expr: proxy_offline_lease_until_seconds - time() < 900
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: 'Worker offline lease expires in less than 15 minutes'}
+      - alert: ProxyControlDatabaseUnavailable
+        expr: relayweave_database_up == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: 'Control database unavailable'}
+      - alert: ProxySubscriptionExpired
+        expr: (time() - proxy_subscription_last_success_timestamp_seconds > proxy_subscription_max_stale_seconds) and on(source) (proxy_subscription_enabled == 1)
+        for: 1m
+        labels: {severity: warning}
+        annotations: {summary: 'Enabled subscription exceeded its freshness limit'}
+      - alert: ProxySubscriptionRefreshFailed
+        expr: proxy_subscription_refresh_error == 1
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: 'Subscription refresh is failing; previous snapshot is retained'}
+      - alert: ProxyCertificateExpiring
+        expr: proxy_certificate_expiry_timestamp_seconds - time() < 2592000
+        for: 1m
+        labels: {severity: warning}
+        annotations: {summary: 'Certificate expires within 30 days; check automatic renewal and authority lifetime'}
+      - alert: ProxyStateDiskLow
+        expr: proxy_state_disk_free_bytes < 536870912
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: 'Less than 512 MiB available for durable worker state'}
+      - alert: ProxyRolloutBehind
+        expr: relayweave_worker_applied_generation < scalar(relayweave_desired_generation)
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: 'Worker did not accept the desired configuration'}
+      - alert: ProxyTelemetryDropped
+        expr: increase(proxy_telemetry_dropped_total[10m]) > 0
+        for: 1m
+        labels: {severity: warning}
+        annotations: {summary: 'Structured logs could not be exported; inspect Docker logs'}

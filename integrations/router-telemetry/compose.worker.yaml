@@ -1,0 +1,9 @@
+# Merge after the main RelayWeave deployment only when the local optional
+# collector is installed. Requires Linux host networking for the worker.
+services:
+  worker:
+    environment:
+      ROUTER_TELEMETRY_URL: http://127.0.0.1:18530/v1/snapshot
+      ROUTER_TELEMETRY_TOKEN_FILE: /router-telemetry/token
+    volumes:
+      - ${ROUTER_TELEMETRY_TOKEN_PATH:?Set the collector consumer-token file}:/router-telemetry/token:ro

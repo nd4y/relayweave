@@ -1,0 +1,9 @@
+FROM node:26-bookworm-slim@sha256:298992629d69bbd5b2b03ad57094d8e4fcb3a8eeb7c4e25d29de656519568913
+ENV NODE_OPTIONS=--max-old-space-size=768
+WORKDIR /work
+COPY package*.json ./
+RUN npm ci --no-audit --no-fund
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npx playwright install --with-deps --only-shell chromium && rm -rf /var/lib/apt/lists/*
+COPY . .
+CMD ["npx","playwright","test","--reporter=line"]

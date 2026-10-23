@@ -1,0 +1,264 @@
+name: relayweave
+x-runtime:
+  image: ${RELAYWEAVE_IMAGE:-relayweave:local}
+  build: .
+  restart: unless-stopped
+  read_only: true
+  cap_drop: &id001
+  - ALL
+  security_opt: &id002
+  - no-new-privileges:true
+  tmpfs: &id003
+  - /tmp:size=64m,mode=1777
+  logging: &id004
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '3'
+      mode: non-blocking
+      max-buffer-size: 4m
+services:
+  init:
+    image: ${RELAYWEAVE_IMAGE:-relayweave:local}
+    build: .
+    restart: 'no'
+    read_only: true
+    cap_drop: *id001
+    security_opt: *id002
+    tmpfs: *id003
+    logging: *id004
+    user: 0:0
+    cap_add:
+    - CHOWN
+    - DAC_OVERRIDE
+    entrypoint:
+    - /app/control-plane
+    command:
+    - init
+    network_mode: none
+    volumes:
+    - ${DATA_ROOT:-./data}/control:/data
+    - ${DATA_ROOT:-./data}/worker:/workerdata
+    - ${DATA_ROOT:-./data}/control-identity:/control-identity
+    - ${DATA_ROOT:-./data}/worker-identity:/worker-identity
+    - ${DATA_ROOT:-./data}/cores:/cores
+    - ${DATA_ROOT:-./data}/prometheus:/observability/prometheus
+    - ${DATA_ROOT:-./data}/grafana:/observability/grafana
+    - ${DATA_ROOT:-./data}/loki:/observability/loki
+    cpus: 0.5
+    mem_limit: 128m
+    pids_limit: 32
+  database:
+    image: postgres:18.6-bookworm
+    restart: unless-stopped
+    stop_grace_period: 5m
+    environment:
+      POSTGRES_DB: relayweave
+      POSTGRES_USER: relayweave
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?Set DATABASE_PASSWORD in .env}
+      PGCTLTIMEOUT: '300'
+    volumes:
+    - ${DATA_ROOT:-./data}/postgres:/var/lib/postgresql
+    networks:
+    - control
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - pg_isready -h 127.0.0.1 -U relayweave -d relayweave
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10m
+    cpus: 1.0
+    mem_limit: 512m
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+  control-plane:
+    image: ${RELAYWEAVE_IMAGE:-relayweave:local}
+    build: .
+    restart: unless-stopped
+    read_only: true
+    cap_drop: *id001
+    security_opt: *id002
+    tmpfs: *id003
+    logging: *id004
+    entrypoint:
+    - /app/control-plane
+    command:
+    - serve
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env (at least 12 characters)}
+      DATABASE_URL: postgres://relayweave:${DATABASE_PASSWORD}@database:5432/relayweave?sslmode=disable
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      CLIENT_DEFAULT_BIND_IP: ${CLIENT_DEFAULT_BIND_IP:-0.0.0.0}
+      CLIENT_DEFAULT_HTTP_PORT: ${HTTP_PORT:-18080}
+      CLIENT_DEFAULT_SOCKS_PORT: ${SOCKS_PORT:-11080}
+      CLIENT_PUBLIC_PORTS: ${HTTP_PORT:-18080},${HTTP_AUTH_PORT:-18081},${SOCKS_PORT:-11080},${SOCKS_AUTH_PORT:-11081}
+      INITIAL_PROXY_ADVERTISE_IP: ${PROXY_ADVERTISE_IP:-127.0.0.1}
+      XRAY_ALLOWED_REPOSITORIES: ${XRAY_ALLOWED_REPOSITORIES:-XTLS/Xray-core}
+      LOKI_URL: ${LOKI_URL:-}
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      database:
+        condition: service_healthy
+    volumes:
+    - ${DATA_ROOT:-./data}/control:/data
+    - ${DATA_ROOT:-./data}/control-identity:/control-identity
+    networks:
+      control:
+        aliases:
+        - control-plane-managed
+      egress: {}
+    healthcheck:
+      test:
+      - CMD
+      - /app/proxy-worker
+      - health
+      - --url
+      - http://127.0.0.1:8080/healthz
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    cpus: 1.5
+    mem_limit: 768m
+    pids_limit: 128
+  worker:
+    image: ${RELAYWEAVE_IMAGE:-relayweave:local}
+    build: .
+    restart: unless-stopped
+    read_only: true
+    cap_drop: *id001
+    security_opt: *id002
+    tmpfs: *id003
+    logging: *id004
+    command:
+    - agent
+    environment:
+      WORKER_ID: worker-1
+      CONTROL_ADDRESS: control-plane-managed:9443
+      LOKI_URL: ${LOKI_URL:-}
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      control-plane:
+        condition: service_healthy
+    volumes:
+    - ${DATA_ROOT:-./data}/worker:/data
+    - ${DATA_ROOT:-./data}/worker-identity:/worker-identity
+    - ${DATA_ROOT:-./data}/cores:/cores
+    networks:
+      control:
+        aliases:
+        - worker-1
+      egress: {}
+    ports:
+    - ${BIND_IP:-127.0.0.1}:${HTTP_PORT:-18080}:${HTTP_PORT:-18080}
+    - ${BIND_IP:-127.0.0.1}:${SOCKS_PORT:-11080}:${SOCKS_PORT:-11080}
+    - ${BIND_IP:-127.0.0.1}:${HTTP_AUTH_PORT:-18081}:${HTTP_AUTH_PORT:-18081}
+    - ${BIND_IP:-127.0.0.1}:${SOCKS_AUTH_PORT:-11081}:${SOCKS_AUTH_PORT:-11081}
+    - ${BIND_IP:-127.0.0.1}:31000-31255:31000-31255/udp
+    healthcheck:
+      test:
+      - CMD
+      - /app/proxy-worker
+      - health
+      - --url
+      - http://127.0.0.1:9090/livez
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    cpus: ${WORKER_CPUS:-4}
+    mem_limit: 2g
+    pids_limit: 1024
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+  frontend:
+    image: ${RELAYWEAVE_UI_IMAGE:-relayweave-ui:local}
+    build:
+      context: ./web
+      args:
+        VITE_GRAFANA_URL: ${GRAFANA_URL:-}
+    restart: unless-stopped
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    read_only: true
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /tmp:size=32m,mode=1777
+    networks:
+    - control
+    - edge
+    environment:
+      UI_LISTEN_PORT: ${UI_PORT:-18443}
+    ports:
+    - ${BIND_IP:-127.0.0.1}:${UI_PORT:-18443}:${UI_PORT:-18443}
+    cpus: 0.5
+    mem_limit: 128m
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+  prometheus:
+    image: prom/prometheus:v3.10.0
+    profiles:
+    - observability
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    command:
+    - --config.file=/etc/prometheus/prometheus.yml
+    - --storage.tsdb.retention.time=15d
+    - --storage.tsdb.path=/prometheus
+    volumes:
+    - ./observability/prometheus:/etc/prometheus:ro
+    - ${DATA_ROOT:-./data}/prometheus:/prometheus
+    networks:
+    - control
+    cpus: 0.5
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+  loki:
+    image: grafana/loki:3.6.0
+    profiles:
+    - observability
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    command:
+    - -config.file=/etc/loki/config.yaml
+    volumes:
+    - ./observability/loki.yaml:/etc/loki/config.yaml:ro
+    - ${DATA_ROOT:-./data}/loki:/loki
+    networks:
+    - control
+    cpus: 0.5
+    mem_limit: 384m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '2'
+networks:
+  control:
+    internal: true
+  egress: {}
+  edge: {}
