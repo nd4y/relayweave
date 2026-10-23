@@ -1,5 +1,7 @@
 # Automatic subscription rollover
 
+**English** | [Русский](subscription-rollover.ru.md)
+
 The default journey is to add subscriptions. The automatic pool discovers their
 eligible profiles; the worker chooses diverse proxy/ISP paths and allocation
 weights from observed latency, useful delivered traffic, bounded capacity

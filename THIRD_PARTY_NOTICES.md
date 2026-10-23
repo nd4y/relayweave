@@ -1,5 +1,7 @@
 # Third-party components
 
+**English** | [Русский](THIRD_PARTY_NOTICES.ru.md)
+
 RelayWeave starts unmodified Xray-core release binaries as separate processes. Xray-core uses MPL-2.0. The builtin directory retains the upstream release LICENSE, as do downloaded cache artifacts when supplied by their archives.
 
 - [Xray26.10.17 release](https://github.com/XTLS/Xray-core/releases/tag/v26.10.17)

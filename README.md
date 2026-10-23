@@ -107,3 +107,7 @@ synthetic fixtures, never production subscriptions. See [CONTRIBUTING](CONTRIBUT
 
 Original source: Apache-2.0. Third-party components, including Xray and elkjs,
 retain their own licenses; see [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md).
+
+## Documentation
+
+Complete [English documentation](docs/README.md) and [Russian documentation](docs/README.ru.md).

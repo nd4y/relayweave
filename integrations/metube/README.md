@@ -1,5 +1,7 @@
 # MeTube: parallel downloads with a stable upstream per file
 
+**English** | [Русский](README.ru.md)
+
 The generic RelayWeave proxy balances connections. Some media/CDN requests need
 the same egress throughout extraction and download. For those requests, use
 authenticated internal listeners backed by independent server-IP groups and

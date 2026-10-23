@@ -1,7 +1,11 @@
 """Small credential-free repository checks. Heavy acceptance runs on a build host."""
 import ast
+import sys
 from pathlib import Path
+sys.dont_write_bytecode = True
+from check_documentation import check_documentation
 root = Path(__file__).resolve().parents[1]
+documentation_pairs = check_documentation(root)
 required = ["README.md", "README.ru.md", "LICENSE", "NOTICE", "SECURITY.md", "compose.yaml", ".env.example", "go.mod", "web/package-lock.json", "docs/images/traffic-map.png"]
 for name in required:
     assert (root / name).is_file(), f"Missing {name}"
@@ -13,4 +17,4 @@ for p in files:
     assert ".private." not in p.name, f"Private file: {rel}"
     if p.suffix == ".py":
         ast.parse(p.read_text(encoding="utf-8"), filename=str(rel))
-print(f"Repository hygiene and Python syntax passed ({len(files)} files)")
+print(f"Repository hygiene and Python syntax passed ({len(files)} files; {documentation_pairs} bilingual documentation pairs)")

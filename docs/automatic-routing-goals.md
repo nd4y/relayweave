@@ -1,5 +1,7 @@
 # Default automatic routing: product acceptance contract
 
+**English** | [Русский](automatic-routing-goals.ru.md)
+
 Priority 1, specified by the owner on 2026-10-22: a user adds subscriptions and
 gets the best practical speed, latency and stability without selecting profiles
 or tuning weights. This document is an acceptance requirement, not a claim that

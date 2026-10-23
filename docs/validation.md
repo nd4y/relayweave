@@ -1,5 +1,7 @@
 # Validation and scope
 
+**English** | [Русский](validation.ru.md)
+
 The source is a prototype, not a claim of universal provider compatibility or faster networking.
 The current UI passed15 acceptance scenarios on an isolated Docker build host, including
 IP grouping/expansion, recorded selection reasons, real ELK worker lifecycle/fallback,

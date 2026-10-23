@@ -1,5 +1,7 @@
 # Optional router telemetry modules
 
+**English** | [Русский](router-integrations.ru.md)
+
 Status: read-only collector and optional worker consumer implemented. Auto and
 throughput policies automatically select profiles and ISP weights, with or
 without router telemetry. Installing the collector alone does not activate the

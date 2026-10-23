@@ -1,5 +1,7 @@
 # Local routing and optional compute v1
 
+**English** | [Русский](compute-v1.ru.md)
+
 This branch implements the local-v1 baseline and the first bounded compute protocol from routing specification 2.0. It is a development candidate. It has not been deployed. Production acceptance requires the evidence listed below.
 
 ## Defaults and boundaries

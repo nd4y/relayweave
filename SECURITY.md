@@ -1,5 +1,7 @@
 # Security reporting
 
+**English** | [Русский](SECURITY.ru.md)
+
 Use the repository Security advisories / Report a vulnerability feature for a
 private report. Do not publish provider URLs, HWID/device headers, passwords,
 private keys, cookies, exports or production packet captures in issues.

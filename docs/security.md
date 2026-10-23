@@ -1,5 +1,7 @@
 # Security and audit scope
 
+**English** | [Русский](security.ru.md)
+
 Use explicitly selected private LAN/NetBird interfaces; the default bind is127.0.0.1. One administrator uses ADMIN_PASSWORD. Session cookies, CSRF/origin checks, optimistic versions and durable operations protect configuration changes. Serve the UI over HTTPS and set COOKIE_SECURE accordingly. Optional client HTTP/SOCKS passwords are separate listener credentials.
 
 Source fetches validate resolved destinations, bound response sizes and strip credentials/device headers on cross-host redirects. Private source addresses require explicit permission. Independent engine probes do not carry subscription headers or admin cookies. Secrets are encrypted in storage with protected local key material. Keep DATA_ROOT/env private; backup encryption does not protect a compromised live host.

@@ -1,5 +1,7 @@
 # Traffic map: React Flow and embedded ELK
 
+**English** | [Русский](reactflow-topology.ru.md)
+
 The frontend renders the existing read-only topology API with React Flow. ELK
 is bundled in the image and runs in a same-origin browser Web Worker. No layout
 service, Java runtime, external CDN or extra production container is required.

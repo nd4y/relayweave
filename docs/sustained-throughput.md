@@ -1,5 +1,7 @@
 # Sustained throughput: design and validation plan
 
+**English** | [Русский](sustained-throughput.ru.md)
+
 Status: first implementation available; sustained WAN acceptance is pending.
 The complete controller below remains a development contract. See
 [automatic routing](automatic-routing-goals.md) and [validation](validation.md).

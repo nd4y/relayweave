@@ -1,5 +1,7 @@
 # Proxy + ISP paths
 
+**English** | [Русский](dualwan.ru.md)
+
 RelayWeave can compile each eligible proxy profile into independently probed
 `(profile, egress)` paths. Enable this in Settings / ISP channels, then plan and
 apply a configuration. Existing deployments without `egress_paths` retain their

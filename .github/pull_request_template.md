@@ -1,5 +1,7 @@
-## Что изменилось
+## What changed / Что изменилось
 
-## Проверки
+## Validation / Проверки
 
-## Ограничения и откат
+## Limits and rollback / Ограничения и откат
+
+- [ ] Documentation updated in English and Russian / Документация обновлена на английском и русском
