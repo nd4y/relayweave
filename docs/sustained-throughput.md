@@ -8,6 +8,9 @@ The complete controller below remains a development contract. See
 A high short speed-test result does not prove
 continuous throughput, single-stream bonding or symmetrical upload performance.
 
+The [2026-10-25 queue and QoS A/B report](dualwan-ab-20261025.md) records a
+1.222 Gbps complete-batch result and the remaining dual-ISP constraints.
+
 ## Own traffic and dual-ISP headroom
 
 In automatic/throughput mode, configured ISP download capacities are starting estimates, not rate limits. Two 800 Mbps subscriptions should use 800 Mbps for each ISP and 1600 Mbps for aggregate download capacity. Configure upload capacity from the actual upstream service. Manual weights do not override these capacity estimates in automatic mode.
