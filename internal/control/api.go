@@ -163,6 +163,10 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) > 2 {
 		action := parts[2]
+		if kind == "sources" && action == "reveal-url" && len(parts) == 3 {
+			s.revealSourceURL(w, r, o)
+			return
+		}
 		if kind == "sources" && action == "rollovers" && r.Method == "GET" {
 			s.sourceRollovers(w, r, id)
 			return

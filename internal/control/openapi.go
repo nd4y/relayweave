@@ -122,6 +122,7 @@ func OpenAPI() map[string]any {
 	for _, path := range []string{"sources/{id}/preview", "pools/{id}/preview", "operations/{id}"} {
 		add("/api/v1/"+path, "get", "Read "+path, "200", nil, false)
 	}
+	add("/api/v1/sources/{id}/reveal-url", "post", "Reveal only this source URL on explicit administrator request; no-store response", "200", nil, false)
 	for _, path := range []string{"sources/{id}/refresh", "sources/{id}/test", "sources/{id}/approve", "profiles/{id}/test", "profiles/{id}/speed-test", "config/apply", "config/rollback", "cores/install", "cores/approve", "cores/cache", "cores/remove", "workers/{id}/drain", "workers/{id}/resume", "workers/{id}/restart-core"} {
 		add("/api/v1/"+path, "post", path+" (poll /operations/ID for completion)", "202", map[string]any{"type": "object"}, true)
 	}

@@ -93,6 +93,7 @@ import { CoreCache } from "./core-cache";
 import { countRu } from "./counts";
 import { TrafficTopology } from "./topology";
 import { SharedNetworkArt } from "./shared-network-art";
+import { SourceURLField } from "./source-url-field";
 import "./styles.css";
 
 const grafanaURL = import.meta.env.VITE_GRAFANA_URL?.trim() || "";
@@ -1413,6 +1414,15 @@ function App() {
                               </Stack>
                               {page === "sources" && (
                                 <>
+                                  <Box mt={2}>
+                                    <SourceURLField
+                                      readOnly
+                                      sourceId={item.id}
+                                      sourceVersion={item.version}
+                                      hint={item.data.url_hint}
+                                      configured={!!item.data.url_configured}
+                                    />
+                                  </Box>
                                   <Typography
                                     variant="body2"
                                     color="text.secondary"

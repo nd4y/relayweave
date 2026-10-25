@@ -30,6 +30,7 @@ import { type GridColDef, type GridRowSelectionModel } from "@mui/x-data-grid";
 import { api, message, type Item } from "./api";
 import { DataGrid } from "./data-grid";
 import { countRu } from "./counts";
+import { SourceURLField } from "./source-url-field";
 
 export const labels: Record<string, string> = {
   sources: "Подписки",
@@ -642,14 +643,20 @@ export function Editor({
               </Tabs>
               {tab === 0 ? (
                 <Stack spacing={2.5}>
-                  {input("url", "URL подписки", {
-                    type: "password",
-                    required: !item,
-                    placeholder: item?.data.url_hint || "https://…",
-                    helperText: item
-                      ? "Оставьте пустым, чтобы сохранить действующий URL. Секретная часть скрыта."
-                      : "URI-список, base64, Xray JSON, sing-box JSON или Mihomo YAML",
-                  })}
+                  <SourceURLField
+                    sourceId={item?.id}
+                    sourceVersion={item?.version}
+                    value={data.url || ""}
+                    onChange={(value) => set("url", value)}
+                    required={!item}
+                    hint={item?.data.url_hint}
+                    configured={!!item?.data.url_configured}
+                    helperText={
+                      item
+                        ? "Оставьте пустым, чтобы сохранить действующий URL. Секретная часть скрыта."
+                        : "URI-список, base64, Xray JSON, sing-box JSON или Mihomo YAML"
+                    }
+                  />
                   <Box className="two-col">
                     {
                       <TextField
