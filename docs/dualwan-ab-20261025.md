@@ -126,9 +126,12 @@ and failed results. Only then compare a cheaper queue configuration or another
 forwarding platform under both throughput and interactive-latency acceptance.
 No permanent router change is selected by this report.
 
-The current shapers total 1.52 Gbps before encapsulation and link overhead, leaving
-little margin for a 1.5 Gbps application target. Adding proxy aliases or CPU on
-remote nodes does not remove that shared forwarding constraint. Generic FastTrack
+The configured CAKE bandwidth values sum to 1.52 Gbps per direction. That is a
+configuration observation, not a verified application-throughput ceiling. Later
+[fixed-path controls](path-capacity-20261026.md) measured more than 760 Mbps on
+one ISP with these settings unchanged, so queue coverage and enforcement must be
+validated before treating their sum as a hard limit. Adding proxy aliases or CPU
+on remote nodes does not remove a shared forwarding constraint. Generic FastTrack
 is not a safe shortcut for source-selected routing tables: RouterOS documents
 its main-table restriction and queue/firewall bypass behavior in
 [Packet Flow in RouterOS](https://help.mikrotik.com/docs/spaces/ROS/pages/328227/Packet+Flow+in+RouterOS).
