@@ -11,6 +11,7 @@ import (
 	"proxyplatform/internal/core"
 	"proxyplatform/internal/wire"
 	"sort"
+	"strconv"
 	"time"
 )
 
@@ -69,6 +70,9 @@ func (a *Agent) test(ctx context.Context, command wire.Command) (any, error) {
 	e, err := r.ensure(ctx, cfg, route)
 	if err != nil {
 		return nil, err
+	}
+	if command.Action == "speed-test" && body.Automatic && e.route.probeTargetCooling(time.Now()) {
+		return nil, fmt.Errorf("probe_target_cooldown")
 	}
 	e.route.LastProbeAttempt.Store(time.Now().Unix())
 	targetURL := body.ProbeURL
@@ -135,11 +139,21 @@ func (a *Agent) test(ctx context.Context, command wire.Command) (any, error) {
 	}
 	resp, err := client.Do(request)
 	if err != nil {
-		e.route.failed()
+		// An optional capacity origin is not the route's health authority.
+		if command.Action != "speed-test" {
+			e.route.failed()
+		}
 		return nil, fmt.Errorf("probe_connection_failed")
 	}
 	defer resp.Body.Close()
 	first := time.Since(started)
+	if command.Action == "speed-test" {
+		e.route.ProbeHTTPStatus.Store(int64(resp.StatusCode))
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			e.route.ProbeNotBefore.Store(probeRetryAt(resp.Header.Get("Retry-After"), time.Now()).Unix())
+			return nil, fmt.Errorf("probe_target_throttled")
+		}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("probe_http_status")
 	}
@@ -196,6 +210,23 @@ func (a *Agent) test(ctx context.Context, command wire.Command) (any, error) {
 		result["confidence"] = "single_bounded_aggregate_sample"
 	}
 	return result, nil
+}
+
+// Bound provider-origin backoff; never refund a durable byte reservation or
+// turn a throttled benchmark origin into a route health/capacity failure.
+func probeRetryAt(value string, now time.Time) time.Time {
+	delay := 10 * time.Minute
+	if seconds, err := strconv.ParseInt(value, 10, 32); err == nil && seconds >= 0 {
+		delay = time.Duration(seconds) * time.Second
+	} else if at, err := http.ParseTime(value); err == nil {
+		delay = at.Sub(now)
+	}
+	return now.Add(max(time.Minute, min(time.Hour, delay)))
+}
+
+func (r *Route) probeTargetCooling(now time.Time) bool {
+	status := r.ProbeHTTPStatus.Load()
+	return (status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable) && r.ProbeNotBefore.Load() > now.Unix()
 }
 
 func (r *Runtime) reserveProbe(now time.Time, key string, size, budget int64) bool {
@@ -264,6 +295,48 @@ func (r *Runtime) reserveClassifiedProbeLocked(now time.Time, key string, size, 
 	}
 	return true
 }
+
+// Inspect already running, eligible engines without consuming client-selection
+// credits. Restricting discovery to p.best makes capacity-based admission circular:
+// an unmeasured, slightly slower-to-connect reserve can never prove it is faster.
+func (r *Runtime) capacityProbeCandidates(policy string) []*Route {
+	now := time.Now()
+	if r.drained.Load() || now.Unix() > r.lease.Load() {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p := r.policies[policy]
+	if p == nil {
+		return nil
+	}
+	out := []*Route{}
+	for id, e := range r.current {
+		if _, ok := p.rank[id]; !ok || e == nil || e.staged {
+			continue
+		}
+		v := e.route
+		if v == nil || v.Instance == nil || !v.Instance.Ready.Load() || r.establishedOnlyLocked(v.Config) || !r.permitted(policy, v.Config) || !r.egressEnabledLocked(v.Config.EgressID) {
+			continue
+		}
+		if transition := r.rollovers[id]; transition != nil && transition.state != "active_draining" && transition.state != "completed" {
+			continue // Capacity traffic must not bypass subscription canary admission.
+		}
+		if until := r.valid[id]; !until.IsZero() && !now.Before(until) {
+			continue
+		}
+		if v.BlockedUntil.Load() > now.UnixNano() || r.telemetryDownLocked(v.Config.EgressID, now) || !r.policyTargetReadyLocked(p.config, id, now) {
+			continue
+		}
+		if r.localV1 && p.config.Mode == "auto" && !r.localEgressAllowed(v.Config.EgressID) {
+			continue
+		}
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool { return p.rank[out[i].Config.ID] < p.rank[out[j].Config.ID] })
+	return out
+}
+
 func (a *Agent) adaptiveProbes() {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -300,7 +373,7 @@ func (a *Agent) adaptiveProbes() {
 				if p.DisableSpeedProbes || (p.Mode != "auto" && p.Mode != "throughput") {
 					continue
 				}
-				routes := a.runtime.Candidates("policy:" + p.ID)
+				routes := a.runtime.capacityProbeCandidates(p.ID)
 				if len(routes) < 2 {
 					continue // No capacity choice to improve.
 				}

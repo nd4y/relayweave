@@ -8,6 +8,20 @@ The complete controller below remains a development contract. See
 A high short speed-test result does not prove
 continuous throughput, single-stream bonding or symmetrical upload performance.
 
+## Own traffic and dual-ISP headroom
+
+In automatic/throughput mode, configured ISP download capacities are starting estimates, not rate limits. Two 800 Mbps subscriptions should use 800 Mbps for each ISP and 1600 Mbps for aggregate download capacity. Configure upload capacity from the actual upstream service. Manual weights do not override these capacity estimates in automatic mode.
+
+Fresh per-engine payload counters, including draining generations, separate RelayWeave traffic from other WAN use. Its own active transfers already contribute to the scheduling workload; counting all WAN traffic again as background load would penalize productive paths twice. The scheduler subtracts only time-aligned payload observations (at most three seconds old). Missing, stale, future or unrelated observations receive no subtraction. Encapsulation is not subtracted. A bounded saturation guard retains queueing headroom, and EWMA/deadband/slew limits smooth changes. Without router telemetry, profile quality and local workload continue to control allocation.
+
+Worker allocation evidence exposes total `wan_utilization`, `background_utilization`, `own_download_bytes_per_second` and `own_upload_bytes_per_second`. They describe observations, not guaranteed spare capacity. A busy ISP is never assumed to have unlimited capacity because its traffic belongs to RelayWeave.
+
+Capacity origins returning HTTP 429 or 503 trigger a bounded cooldown using `Retry-After` (1 minute to 1 hour, default 10 minutes). Automatic capacity attempts during that cooldown reserve no more bytes. Throttling does not fail route health or replace an existing speed estimate. The original reservation remains spent, and health checks continue independently. Worker engine status exposes `capacity_probe_http_status` and `capacity_probe_not_before`. Cooldown is per route; it does not assert that every exit IP or destination shares the same restriction.
+
+For throughput testing, use multiple authorized origins, fixed concurrency and the same object set before/after. Record HTTP status, complete bytes and wall-clock time. A rate-limited origin is not evidence of proxy capacity. Application aggregate throughput needs multiple connections; one established TCP stream remains on one proxy/ISP. Router shaping, CPU and Ethernet capacity remain external constraints. Two 800 Mbps links provide at most 1.6 Gbps before overhead, not a promise of 1.6 Gbps useful payload.
+
+Capacity discovery includes eligible, already running reserves outside the selected hot window. It does not create additional engines or consume client-selection credits. Disabled, expired, revoked, staged, unready, circuit-open and target-unverified routes remain excluded, as do subscription replacements that have not completed canary admission. The existing serialized probe scheduler and durable traffic cap still apply; discovery does not guarantee a measurement for every subscription profile.
+
 ## Implemented first stage
 
 Automatic profile/IP-group and ISP allocation now distinguish individually
@@ -95,6 +109,39 @@ bundled versions; an initial native timeout remains recorded alongside the
 controlled passing follow-up. These checks do not override the failed WAN run.
 Error classification, bottleneck diagnosis, controlled fixed-path comparisons
 and sustained upload validation remain required before performance acceptance.
+
+## Dual-800-Mbps follow-up (2026-10-25)
+
+The worker changes passed `go test -race ./...`, `go vet ./...` and real-core
+HTTP/SOCKS TCP/UDP and subscription-rollover checks with Xray 26.10.17 and
+26.9.30. The final worker was deployed; external HTTP CONNECT, SOCKS5 TCP and
+SOCKS5 UDP/DNS checks passed. The restart preserved the exhausted 64 MiB capacity
+share of the unchanged 128 MiB daily budget. Reserve discovery therefore passed
+automated admission tests but could not obtain new automatic WAN samples that day.
+
+**The 1.5 Gbps performance objective was not achieved or accepted.** A native
+Windows client with a 2.5 GbE link downloaded the same 64 objects (31,625,365 bytes
+each), from four HTTPS test origins, with 16 concurrent requests and verified TLS.
+The legacy-worker baseline completed all objects at 873.7 Mbps. The first new
+worker run completed all objects at 748.8 Mbps. The final worker completed all
+objects at 522.9 Mbps. These are useful completed bytes divided by whole-batch
+wall time, including setup and tails, not instantaneous peaks or a controlled
+software-only comparison: route populations, learned estimates, configuration
+and external capacity changed between runs.
+
+A 32-connection/128-object trial delivered 903.3 Mbps in complete objects but
+only 116/128 completed, with 12 timeouts. A later four-active/two-reserve run
+completed 59/64 at 590.4 Mbps. Neither is a stable-throughput acceptance result.
+A direct dual-ISP test without external proxies completed only 38/64 objects;
+it cannot establish the WAN ceiling. Rate-limited runs were excluded rather
+than counted as evidence of proxy capacity.
+
+Final upload validation completed and server-confirmed all 32 synthetic 1 MiB
+objects at 23.1 Mbps; an earlier matching run reached 36.7 Mbps. A larger upload
+trial timed out and produced an incomplete log, so no aggregate speed was accepted
+from it. Sustained upload, sustained gigabit download and a software-only A/B
+remain unverified. Router shaping and CPU pressure were observed separately;
+router settings were preserved. These results must not be presented as a speedup.
 
 ## Objective
 

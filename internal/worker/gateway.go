@@ -60,6 +60,7 @@ type Route struct {
 	ErrorEWMA           atomic.Int64
 	ProbeRequestedAt    atomic.Int64
 	ProbeNotBefore      atomic.Int64
+	ProbeHTTPStatus     atomic.Int64
 	LastProbeAttempt    atomic.Int64
 	PassiveBPS          atomic.Int64
 	LastPassive         atomic.Int64

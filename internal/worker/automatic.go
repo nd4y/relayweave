@@ -24,6 +24,9 @@ type allocationEvidence struct {
 	Router      string    `json:"telemetry_state"`
 	ObservedAt  time.Time `json:"observed_at,omitempty"`
 	Utilization *float64  `json:"wan_utilization,omitempty"`
+	Background  *float64  `json:"background_utilization,omitempty"`
+	OwnDownBPS  float64   `json:"own_download_bytes_per_second,omitempty"`
+	OwnUpBPS    float64   `json:"own_upload_bytes_per_second,omitempty"`
 	Factor      float64   `json:"wan_factor"`
 }
 
@@ -79,31 +82,45 @@ func (r *Runtime) automaticISPWeight(p *policyState, path config.EgressPath, lan
 			return a
 		}
 		if a.Mode == "automatic" && (signal.DownloadBPS != nil || signal.UploadBPS != nil) {
-			util := 0.0
+			// Own transfers already contribute to the workload denominator.
+			// Only fresh payload counters may remove that traffic from the
+			// router's background-load penalty; missing observations stay safe.
+			ownDown, ownUp := r.ownISPTraffic(path.ID, signal.ObservedAt, now)
+			a.OwnDownBPS, a.OwnUpBPS = ownDown, ownUp
+			util, background := 0.0, 0.0
 			if signal.DownloadBPS != nil && path.DownloadMbps > 0 {
-				util = *signal.DownloadBPS / (float64(path.DownloadMbps) * 125000)
+				capacity := float64(path.DownloadMbps) * 125000
+				util = *signal.DownloadBPS / capacity
+				background = math.Max(0, *signal.DownloadBPS-ownDown) / capacity
 			}
 			if signal.UploadBPS != nil && path.UploadMbps > 0 {
-				util = math.Max(util, *signal.UploadBPS/(float64(path.UploadMbps)*125000))
+				capacity := float64(path.UploadMbps) * 125000
+				util = math.Max(util, *signal.UploadBPS/capacity)
+				background = math.Max(background, math.Max(0, *signal.UploadBPS-ownUp)/capacity)
 			}
 			util = math.Min(1.5, math.Max(0, util))
+			background = math.Min(1.5, math.Max(0, background))
+			a.Utilization, a.Background = &util, &background
 			if r.ispObservations == nil {
 				r.ispObservations = map[string]ispObservation{}
 			}
+			guard := math.Max(.5, 1-2*math.Max(0, util-.85))
 			old, exists := r.ispObservations[path.ID]
 			if !exists || now.Sub(old.at) > routertelemetry.ConsumerMaxAge {
-				old = ispObservation{at: signal.ObservedAt, utilization: util, factor: math.Max(.1, 1-util)}
+				old = ispObservation{at: signal.ObservedAt, utilization: background, factor: math.Max(.1, 1-background) * guard}
 			} else if !signal.ObservedAt.Equal(old.at) {
 				// Deadband, EWMA and per-sample slew limit prevent oscillation.
-				if math.Abs(util-old.utilization) > .05 {
-					old.utilization = .75*old.utilization + .25*util
+				if math.Abs(background-old.utilization) > .05 {
+					old.utilization = .75*old.utilization + .25*background
 				}
-				target := math.Max(.1, 1-old.utilization)
+				target := math.Max(.1, 1-old.utilization) * guard
 				old.factor = math.Max(old.factor*.75, math.Min(old.factor*1.25, target))
 				old.at = signal.ObservedAt
 			}
 			r.ispObservations[path.ID] = old
-			a.Utilization = &old.utilization
+			// Even our own saturated lane needs queueing headroom. Apply a
+			// bounded guard, rather than treating all its payload as foreign
+			// traffic and starving it as soon as it becomes productive.
 			a.Factor = old.factor
 		} else if a.Mode == "automatic" {
 			delete(r.ispObservations, path.ID)
@@ -113,6 +130,23 @@ func (r *Runtime) automaticISPWeight(p *policyState, path config.EgressPath, lan
 	}
 	a.Effective = prior * quality * a.Factor / (1 + float64(active)/math.Max(1, prior))
 	return a
+}
+
+// r.mu is held. Count all engines, including draining generations, once.
+// Payload excludes encapsulation, so subtraction deliberately underestimates
+// our WAN use. Stale/future or temporally unrelated samples cannot claim relief.
+func (r *Runtime) ownISPTraffic(isp string, observed, now time.Time) (down, up float64) {
+	for _, e := range r.entries {
+		v := e.route
+		at := v.TrafficAt.Load()
+		age, delta := now.Unix()-at, at-observed.Unix()
+		if v.Config.EgressID != isp || at == 0 || age < 0 || age > 3 || delta < -3 || delta > 3 {
+			continue
+		}
+		down += float64(max(int64(0), v.TrafficDownBPS.Load()))
+		up += float64(max(int64(0), v.TrafficUpBPS.Load()))
+	}
+	return
 }
 
 // Alias count must not amplify a shared endpoint. Schedule between IP groups

@@ -67,7 +67,7 @@ func (r *Runtime) capacityConfirmed(policyID string, route *Route, previous, sin
 	}
 	if current < previous/2 {
 		for _, other := range r.Candidates("policy:" + policyID) {
-			if other == route || other.LastSpeed.Load() >= since {
+			if other == route || other.LastSpeed.Load() >= since || other.probeTargetCooling(time.Now()) {
 				continue
 			}
 			// A confirmed change is stronger evidence than an earlier negative

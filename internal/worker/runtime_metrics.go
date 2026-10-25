@@ -78,6 +78,8 @@ func (r *Runtime) Status(g *Gateway) map[string]any {
 		}
 		engines = append(engines, map[string]any{"id": e.key, "profile_id": v.Config.Profile(), "route_id": v.Config.ID, "egress": v.Config.EgressID, "core": v.Config.Core, "version": v.Instance.Config.Version, "sha256": v.Instance.SHA256, "pid": v.Instance.PID.Load(), "ready": r.entryReadyLocked(e), "healthy": v.Instance.Ready.Load(), "state": state, "starts": v.Instance.Starts.Load(), "restarts": v.Instance.Restarts.Load(), "connections": v.Connections.Load(), "active": v.Active.Load(), "failures": v.Failures.Load(), "health_requests": v.Instance.HealthRequests.Load(), "rtt_ms": float64(v.RTTUS.Load()) / 1000, "probe_rtt_ms": float64(v.Instance.LatencyUS.Load()) / 1000, "probe_samples": v.Instance.ProbeSamples.Load(), "last_probe_at": v.Instance.LastProbe.Load(), "samples": v.Samples.Load(), "speed_bps": v.SpeedBPS.Load(), "speed_sample_at": v.LastSpeed.Load(), "speed_confidence": "bounded_active_sample", "passive_goodput_bps": v.PassiveBPS.Load(), "passive_capacity_claim": false, "circuit_until": v.BlockedUntil.Load(), "bytes_up": v.BytesUp.Load(), "bytes_down": v.BytesDown.Load()})
 		engines[len(engines)-1]["traffic_down_bps"] = v.TrafficDownBPS.Load()
+		engines[len(engines)-1]["capacity_probe_http_status"] = v.ProbeHTTPStatus.Load()
+		engines[len(engines)-1]["capacity_probe_not_before"] = v.ProbeNotBefore.Load()
 		engines[len(engines)-1]["traffic_up_bps"] = v.TrafficUpBPS.Load()
 		engines[len(engines)-1]["load_units"] = v.workload(time.Now())
 		engines[len(engines)-1]["sampled_idle_tcp"] = v.IdleTCP.Load()
