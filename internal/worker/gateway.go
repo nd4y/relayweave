@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -93,6 +94,7 @@ type Gateway struct {
 	sockets      map[*routeConn]struct{}
 	destMu       sync.Mutex
 	destFailures map[[32]byte]map[string]time.Time
+	diagnostics  connectDiagnosticPolicy
 }
 type boundListener struct {
 	config    config.Listener
@@ -149,7 +151,7 @@ func routeKey(l config.Listener) string {
 }
 
 func New(ctx context.Context, c config.Config, m *core.Manager) *Gateway {
-	g := &Gateway{Topology: topology.NewObserver(), Config: c, Manager: m, ctx: ctx, connections: map[net.Conn]struct{}{}, ports: map[int]bool{}, sockets: map[*routeConn]struct{}{}}
+	g := &Gateway{Topology: topology.NewObserver(), Config: c, Manager: m, ctx: ctx, connections: map[net.Conn]struct{}{}, ports: map[int]bool{}, sockets: map[*routeConn]struct{}{}, diagnostics: loadConnectDiagnosticPolicy(os.Getenv(connectDiagnosticsEnv))}
 	go g.sampleSockets()
 	for _, r := range c.Routes {
 		g.Routes = append(g.Routes, &Route{Config: r, Instance: m.Instances[r.Core]})
@@ -670,7 +672,7 @@ func (g *Gateway) httpProxy(l config.Listener, tr *http.Transport, w http.Respon
 		defer g.release(c)
 		defer c.Close()
 		c.SetDeadline(time.Time{})
-		if _, e = buffer.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); e != nil {
+		if _, e = buffer.WriteString(g.diagnostics.response(r.RemoteAddr, route)); e != nil {
 			return
 		}
 		if buffer.Flush() != nil {

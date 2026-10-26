@@ -14,6 +14,7 @@
 | [compute-v1](compute-v1.ru.md) | Локальная маршрутизация и протокол вычислений: кандидат для разработки |
 | [reactflow-topology](reactflow-topology.ru.md) | Карта трафика, группировка, графики и полноэкранный режим |
 | [security](security.ru.md) | Границы безопасности и зафиксированный объём аудита |
+| [connect-diagnostics](connect-diagnostics.ru.md) | Необязательная диагностика маршрута CONNECT для доверенных клиентов |
 | [validation](validation.ru.md) | Подтверждённые проверки и ограничения |
 | [MeTube](../integrations/metube/README.ru.md) | Параллельная загрузка файлов со стабильным выходом
 

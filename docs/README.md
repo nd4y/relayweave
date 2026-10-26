@@ -14,6 +14,7 @@ Every project document is maintained in English and Russian. Translations preser
 | [compute-v1](compute-v1.md) | Local routing and optional compute protocol: development candidate |
 | [reactflow-topology](reactflow-topology.md) | Traffic map, grouping, charts and fullscreen |
 | [security](security.md) | Security boundaries and recorded audit scope |
+| [connect-diagnostics](connect-diagnostics.md) | Opt-in CONNECT route attribution for trusted clients |
 | [validation](validation.md) | Validation evidence and limits |
 | [MeTube](../integrations/metube/README.md) | Parallel file downloads with stable egress
 
