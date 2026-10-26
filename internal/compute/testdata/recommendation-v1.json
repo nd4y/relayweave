@@ -1,0 +1,57 @@
+{
+  "note": "Public deterministic test key only. Generated independently with Python cryptography and integer ASCII JSON. Never use this seed for identities.",
+  "seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "public_key": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+  "canonical_payload": "{\"blend_ppm\":100000,\"candidate\":{\"id\":2,\"weights_ppm\":[600000,400000]},\"key_id\":\"golden-key\",\"owner_epoch\":1,\"sequence\":1,\"snapshot\":{\"boot\":\"boot\",\"demand_bps\":0,\"executor\":\"worker-1\",\"generation\":1,\"groups\":[{\"baseline_ppm\":500000,\"busy_bps\":0,\"capacity_bps\":10000000,\"error_ppm\":0,\"id\":\"a\",\"lane\":\"lane\",\"rtt_ms\":20,\"samples\":100},{\"baseline_ppm\":500000,\"busy_bps\":0,\"capacity_bps\":10000000,\"error_ppm\":0,\"id\":\"b\",\"lane\":\"lane\",\"rtt_ms\":1000,\"samples\":100}],\"installation\":\"installation\",\"objective\":\"objective-v1\",\"policy\":\"policy\",\"route_set\":\"0473ef2dc0d324ab659d3580c1134e9d812035905c4781fdd6d529b0c6860e13\",\"sequence\":1,\"version\":1},\"snapshot_digest\":\"84fa67aa92ba896e02922e85f6c782591b6065a5830519d589562bf77c809824\",\"version\":1}",
+  "payload_hash": "3cbaadccc141c2dafd28b0c082785ea7b1dbdef5d7146af5a6f8c8aadd507b68",
+  "signature": "7z-Pm70ixZ9n8SV_P38BGNSO-ngyYJCFP7RB7wFwRefVhB20RuJxoOemoy3qmSyxhpIDu_f6SzVCmVGvmOwRAQ",
+  "payload": {
+    "version": 1,
+    "key_id": "golden-key",
+    "owner_epoch": 1,
+    "sequence": 1,
+    "snapshot": {
+      "version": 1,
+      "installation": "installation",
+      "executor": "worker-1",
+      "policy": "policy",
+      "boot": "boot",
+      "sequence": 1,
+      "generation": 1,
+      "route_set": "0473ef2dc0d324ab659d3580c1134e9d812035905c4781fdd6d529b0c6860e13",
+      "objective": "objective-v1",
+      "demand_bps": 0,
+      "groups": [
+        {
+          "id": "a",
+          "lane": "lane",
+          "baseline_ppm": 500000,
+          "rtt_ms": 20,
+          "error_ppm": 0,
+          "samples": 100,
+          "capacity_bps": 10000000,
+          "busy_bps": 0
+        },
+        {
+          "id": "b",
+          "lane": "lane",
+          "baseline_ppm": 500000,
+          "rtt_ms": 1000,
+          "error_ppm": 0,
+          "samples": 100,
+          "capacity_bps": 10000000,
+          "busy_bps": 0
+        }
+      ]
+    },
+    "snapshot_digest": "84fa67aa92ba896e02922e85f6c782591b6065a5830519d589562bf77c809824",
+    "candidate": {
+      "id": 2,
+      "weights_ppm": [
+        600000,
+        400000
+      ]
+    },
+    "blend_ppm": 100000
+  }
+}

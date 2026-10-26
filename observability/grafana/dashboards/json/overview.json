@@ -1,0 +1,268 @@
+{
+  "uid": "rw-overview",
+  "title": "RelayWeave / Overview",
+  "tags": [
+    "relayweave"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "refresh": "15s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Active TCP connections",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "relayweave-prometheus"
+      },
+      "targets": [
+        {
+          "expr": "proxy_connections_active",
+          "refId": "A",
+          "legendFormat": "{{route}}{{core}}{{worker}}{{direction}}{{job}}{{kind}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "UDP associations",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "relayweave-prometheus"
+      },
+      "targets": [
+        {
+          "expr": "proxy_udp_associations_active",
+          "refId": "A",
+          "legendFormat": "{{route}}{{core}}{{worker}}{{direction}}{{job}}{{kind}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Ready routes",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "relayweave-prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(proxy_paths_ready)",
+          "refId": "A",
+          "legendFormat": "{{route}}{{core}}{{worker}}{{direction}}{{job}}{{kind}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Live payload traffic, excludes handshake",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "relayweave-prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by(direction)(rate(proxy_payload_bytes_total[2m])) * 8",
+          "refId": "A",
+          "legendFormat": "{{route}}{{core}}{{worker}}{{direction}}{{job}}{{kind}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Connection attempts",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "relayweave-prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by(core)(rate(proxy_route_connections_total[2m]))",
+          "refId": "A",
+          "legendFormat": "{{route}}{{core}}{{worker}}{{direction}}{{job}}{{kind}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Connection failures",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "relayweave-prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(proxy_route_failures_total[2m]))",
+          "refId": "A",
+          "legendFormat": "{{route}}{{core}}{{worker}}{{direction}}{{job}}{{kind}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    }
+  ],
+  "editable": false,
+  "annotations": {
+    "list": []
+  },
+  "links": [
+    {
+      "title": "RelayWeave",
+      "url": "/",
+      "type": "link"
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="10">
+  <title>Мониторинг временно недоступен | RelayWeave</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; color: #172d29; background: #f4f8f6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; }
+    main { width: min(100%, 560px); padding: clamp(24px, 5vw, 40px); border: 1px solid #d7e5df; border-radius: 28px; background: #fff; box-shadow: 0 12px 48px #122b2010; }
+    .brand { color: #246451; font-size: 14px; font-weight: 700; letter-spacing: .04em; }
+    h1 { font-size: clamp(24px, 5vw, 30px); line-height: 1.2; margin: 20px 0 16px; }
+    p { line-height: 1.6; color: #52655d; }
+    nav { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+    a { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: 12px 22px; border-radius: 24px; color: #fff; background: #246451; font-weight: 600; text-decoration: none; transition: background .2s, box-shadow .2s; }
+    a.secondary { color: #246451; background: #e9f3ee; }
+    a:hover { box-shadow: 0 3px 12px #122b2020; }
+    a:focus-visible { outline: 3px solid #447aeb; outline-offset: 4px; }
+    .hint { margin-bottom: 0; font-size: 13px; }
+    @media (prefers-color-scheme: dark) {
+      :root { color: #e4f0e9; background: #0e1915; }
+      main { background: #19251f; border-color: #34483b; }
+      .brand, a.secondary { color: #8bd6b7; }
+      p { color: #b7cbbd; }
+      a { background: #8bd6b7; color: #103526; }
+      a.secondary { background: #293d31; }
+    }
+    @media (max-width: 420px) { nav { flex-direction: column; } }
+    @media (prefers-reduced-motion: reduce) { a { transition: none; } }
+  </style>
+</head>
+<body>
+  <main data-rw-observability-unavailable>
+    <div class="brand">RelayWeave</div>
+    <h1>Мониторинг временно недоступен</h1>
+    <p role="status">Grafana запускается или восстанавливает соединение. Прокси работают независимо от мониторинга.</p>
+    <nav aria-label="Действия">
+      <a href="">Повторить сейчас</a>
+      <a class="secondary" href="/">В приложение</a>
+    </nav>
+    <p class="hint">Страница повторит попытку через 10 секунд. Первый запуск Grafana может занять несколько минут.</p>
+  </main>
+</body>
+</html>

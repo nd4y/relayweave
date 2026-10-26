@@ -1,0 +1,83 @@
+import { test, expect } from "@playwright/test";
+
+test("overview art respects motion preferences, visibility and navigation", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/events/stream")) {
+      await route.fulfill({
+        contentType: "text/event-stream",
+        body: ": ready\n\n",
+      });
+      return;
+    }
+    await route.fulfill({
+      json: path.endsWith("/overview")
+        ? {
+            counts: { sources: 1, profiles: 1, pools: 1 },
+            sources: { fresh: 1, errors: 0, stale: 0 },
+            workers: [],
+            server_time: new Date().toISOString(),
+          }
+        : { items: [] },
+    });
+  });
+  await page.goto("/#overview");
+  const art = page.locator(".rw-ov-art");
+  await expect(art).toHaveAttribute("data-paused", "false");
+  await expect(art).toHaveAttribute("aria-hidden", "true");
+  const geometry = await art.boundingBox();
+  await expect
+    .poll(() =>
+      art.evaluate((el) => el.getAnimations({ subtree: true }).length),
+    )
+    .toBe(15);
+  await page.waitForTimeout(250);
+  expect(await art.boundingBox()).toEqual(geometry);
+  await page.screenshot({ path: test.info().outputPath("overview-dark.png") });
+  await page.getByRole("button", { name: "Переключить тему" }).click();
+  await page.screenshot({ path: test.info().outputPath("overview-light.png") });
+
+  // Shared art now has a compact reserved place on mobile as well.
+  await page.setViewportSize({ width: 768, height: 900 });
+  await expect(art).toBeVisible();
+  await expect(art).toHaveAttribute("data-paused", "false");
+  expect(await art.boundingBox()).toMatchObject({ width: 224, height: 182 });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await expect(art).toHaveAttribute("data-paused", "false");
+
+  // Move the hero outside the viewport to exercise the real IntersectionObserver.
+  await page.locator(".hero-panel").evaluate((el) => {
+    (el as HTMLElement).style.marginTop = "200vh";
+  });
+  await expect(art).toHaveAttribute("data-paused", "true");
+  await page.locator(".hero-panel").evaluate((el) => {
+    (el as HTMLElement).style.marginTop = "";
+  });
+  await art.scrollIntoViewIfNeeded();
+  await expect(art).toHaveAttribute("data-paused", "false");
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(art).toHaveAttribute("data-static", "true");
+  await expect
+    .poll(() =>
+      art.evaluate((el) => el.getAnimations({ subtree: true }).length),
+    )
+    .toBe(0);
+  await page.screenshot({
+    path: test.info().outputPath("overview-reduced.png"),
+  });
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await expect(art).toHaveAttribute("data-paused", "false");
+
+  // Navigation hides the persistent component and then resumes it.
+  await page.goto("/#sources");
+  await expect(art).toBeHidden();
+  await expect(art).toHaveAttribute("data-paused", "true");
+  await page.goto("/#overview");
+  await expect(art).toHaveAttribute("data-paused", "false");
+  expect(errors).toEqual([]);
+});

@@ -1,0 +1,10 @@
+.rw-flow-card { text-align: left; }
+.react-flow__node-route { border-radius: 12px; }
+.react-flow__node-route:focus-visible { outline: 3px solid var(--xy-node-border-default); outline-offset: 4px; }
+.react-flow__controls button { min-width: 30px; min-height: 30px; }
+@media (pointer: coarse) { .react-flow__controls button { min-width: 44px; min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) { .react-flow * { scroll-behavior: auto; animation: none !important; transition: none !important; } }
+
+/* Keep the actual map and its inspector in the browser fullscreen subtree. */
+.rw-topology-fullscreen > :not(.rw-topology-filters):not(.rw-topology-graph):not(.rw-topology-content):not(.MuiDrawer-root):not(.MuiModal-root):not(.MuiPopper-root) { display: none; }
+.rw-topology-fullscreen::backdrop { background: #121016; }

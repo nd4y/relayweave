@@ -1,0 +1,85 @@
+package worker
+
+import "time"
+
+const capacityRefreshSeconds = 300
+
+// Short background samples leave room for revalidation and many profiles.
+// Manual tests retain their existing8MiB bound; both paths reserve before I/O.
+const automaticCapacityProbeBytes int64 = 1 << 20
+
+// Probe unknown paths once, then spend only for traffic or a detected change.
+// Fixed/manual policies are excluded by the scheduler, not by this route gate.
+func (r *Route) capacityRefreshUseful(now time.Time) bool {
+	if r.ProbeRequestedAt.Load() != 0 || r.LastSpeed.Load() == 0 {
+		return true
+	}
+	return now.Unix()-r.LastSpeed.Load() >= capacityRefreshSeconds &&
+		(r.Active.Load() > 0 || r.Connections.Load() > r.CapacityConnections.Load())
+}
+
+// Preserve the first observation of a possible change across a probe round.
+// Alternatives already measured after that observation need no repeat probe.
+func (r *Route) requestCapacityProbe(since int64) {
+	for {
+		old := r.ProbeRequestedAt.Load()
+		if old != 0 && old <= since {
+			return
+		}
+		if r.ProbeRequestedAt.CompareAndSwap(old, since) {
+			return
+		}
+	}
+}
+
+func (r *Route) recordDeliveredRate(bps int64, receiveWindow uint32, now time.Time) {
+	if r.localEnabled.Load() {
+		bps = int64(r.localRate.Observe(now, float64(bps)))
+	}
+	r.PassiveBPS.Store(bps)
+	r.LastPassive.Store(now.Unix())
+	capacity := r.SpeedBPS.Load()
+	expected := capacity / max(int64(1), r.Active.Load())
+	improved := capacity > 0 && bps > capacity+capacity/2
+	// Older TCP_INFO layouts omit rcv_wnd and leave zero here. A low delivered
+	// rate then requests independent confirmation, never a capacity downgrade.
+	// A known small receive window still protects client backpressure.
+	degraded := expected > 0 && bps < expected/4 && (receiveWindow == 0 || receiveWindow >= 65536)
+	if (improved || degraded) && now.Unix()-r.LastSpeed.Load() > 30 && now.Unix() >= r.ProbeNotBefore.Load() {
+		r.requestCapacityProbe(now.Unix())
+	}
+}
+
+// A loaded path losing most of its aggregate delivery warrants confirmation,
+// not an immediate capacity downgrade. Ignore idle/tiny counter windows and
+// honour the same cooldown, serialized probes and durable shared allowance.
+func (r *Route) requestOnAggregateDrop(previous, current int64, now time.Time) {
+	if r.Active.Load() > 0 && current >= 1<<20 && previous/4 > current &&
+		now.Unix()-r.LastSpeed.Load() > 30 && now.Unix() >= r.ProbeNotBefore.Load() {
+		r.requestCapacityProbe(now.Unix())
+	}
+}
+
+func (r *Runtime) capacityConfirmed(policyID string, route *Route, previous, since int64) {
+	current := route.SpeedBPS.Load()
+	if previous <= 0 || current <= 0 {
+		return
+	}
+	if current < previous/2 {
+		for _, other := range r.Candidates("policy:" + policyID) {
+			if other == route || other.LastSpeed.Load() >= since || other.probeTargetCooling(time.Now()) {
+				continue
+			}
+			// A confirmed change is stronger evidence than an earlier negative
+			// passive hint. Revalidate eligible alternatives within the same
+			// bounded, serialized and durably reserved probe mechanism.
+			other.ProbeNotBefore.Store(0)
+			other.requestCapacityProbe(since)
+		}
+	} else if current <= previous+previous/2 {
+		// A slow destination/consumer can also cause low delivered goodput.
+		// Successful unchanged confirmation keeps the normal five-minute
+		// refresh cadence rather than spending the budget every thirty seconds.
+		route.ProbeNotBefore.Store(route.LastSpeed.Load() + capacityRefreshSeconds)
+	}
+}

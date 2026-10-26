@@ -1,0 +1,24 @@
+name: Repository checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - run: python3 tools/check_repository.py
+      - run: python3 -B tools/test_check_documentation.py
+      - name: Check paired documentation updates
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 tools/check_documentation.py --base "$BASE_SHA"
